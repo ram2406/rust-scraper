@@ -6,6 +6,9 @@ use std::{error::Error, str};
 use std::vec::Vec;
 use regex::Regex;
 use scraper;
+use serde::{Deserialize, Serialize};
+use serde;
+use serde_json;
 
 use tracing::{info, debug};
 
@@ -57,25 +60,77 @@ impl ParserTransfromRule<'_> {
 type DataMap = Box<HashMap<String, TransoftmedData>>;
 type DataVec = Box<Vec<TransoftmedData>>;
 
-#[derive(Debug,)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[serde(untagged)]
 pub enum TransoftmedData {
     Dict(DataMap),
     List(DataVec),
     Value(String),
 }
 
+const UNSUPPORTED_ENUM_TYPE: &str = "with unsupported TransformData enum type";
+
+impl From<String> for TransoftmedData {
+    fn from(value: String) -> Self {
+        TransoftmedData::Value(value)
+    }
+}
+impl From<&'_ str> for TransoftmedData {
+    fn from(value: &'_ str) -> Self {
+        TransoftmedData::Value(value.to_string())
+    }
+}
+impl From<DataMap> for TransoftmedData {
+    fn from(value: DataMap) -> Self {
+        TransoftmedData::Dict(value)
+    }
+}
+impl From<DataVec> for TransoftmedData {
+    fn from(value: DataVec) -> Self {
+        TransoftmedData::List(value)
+    }
+}
+impl From<HashMap<String, TransoftmedData>> for TransoftmedData {
+    fn from(value: HashMap<String, TransoftmedData>) -> Self {
+        TransoftmedData::Dict(Box::new(value))
+    }
+}
+impl From<Vec<TransoftmedData>> for TransoftmedData {
+    fn from(value: Vec<TransoftmedData>) -> Self {
+        TransoftmedData::List(Box::new(value))
+    }
+}
+impl Into<String> for TransoftmedData {
+    fn into(self) -> String {
+        match self {
+            TransoftmedData::Value(s) => s,
+            _ => self.to_string()
+        }
+    }
+}
+
+
 impl TransoftmedData {
     pub fn create_data_map() -> DataMap { Box::new(HashMap::new()) }
     pub fn create_data_vec() -> DataVec { Box::new(Vec::new()) }
-
+    pub fn create_dict() -> Self { TransoftmedData::Dict(TransoftmedData::create_data_map()) }
+    pub fn create_list() -> Self { TransoftmedData::List(TransoftmedData::create_data_vec()) }
 
     pub fn prepare_dict(&mut self) -> &mut DataMap {
         let wrapper = self.as_map_wrapper();
         let dict = match wrapper {
             TransoftmedData::Dict(dict) => dict,
-            _ => panic!(),
+            _ => panic!("prepare_dict {UNSUPPORTED_ENUM_TYPE}"),
         };
         dict
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            TransoftmedData::Dict(dict) => dict.is_empty(),
+            TransoftmedData::List(list) => list.is_empty(),
+            TransoftmedData::Value(string) => string.is_empty(),
+        }
     }
 
     pub fn as_map_wrapper(&mut self) -> &mut Self {
@@ -87,23 +142,30 @@ impl TransoftmedData {
                 contained.unwrap()
             },
             TransoftmedData::Dict(dict) => self,
-            _ => panic!(""),
+            _ => panic!("as_map_wrapper {UNSUPPORTED_ENUM_TYPE}"),
         }
     }
 
-    pub fn exract_dict(&mut self) -> &mut HashMap<String, TransoftmedData> {
+    pub fn exract_dict(&self) -> &DataMap {
         return  match self {
             TransoftmedData::Dict(dict) => dict,
-            _ => panic!(""),
+            _ => panic!("extract_dict {UNSUPPORTED_ENUM_TYPE}"),
+        }
+    }
+
+    pub fn exract_dict_mut(&mut self) -> &mut DataMap {
+        return  match self {
+            TransoftmedData::Dict(dict) => dict,
+            _ => panic!("extract_dict_mut {UNSUPPORTED_ENUM_TYPE}"),
         }
     }
 
     #[inline]
-    pub fn push_value(&mut self, value: TransoftmedData, key: &str) -> Option<&mut TransoftmedData> {
+    pub fn push_value(&mut self, key: &str, value: TransoftmedData) -> Option<&mut TransoftmedData> {
         match self {
             TransoftmedData::Dict(dict) => {
                 if key.is_empty() {
-                    panic!()
+                    panic!("push_value with empty key")
                 }
                 dict.insert(String::from(key), value);
                 dict.get_mut(key)
@@ -113,33 +175,51 @@ impl TransoftmedData {
                 let idx = lst.len() -1;
                 lst.get_mut(idx)
             },
-            _ => panic!(),
+            _ => panic!("push_value {UNSUPPORTED_ENUM_TYPE}"),
         }
     }
 
     #[inline]
     pub fn push_value_to_list(&mut self, value: TransoftmedData) -> Option<&mut TransoftmedData> {
-        self.push_value(value, "")
+        self.push_value( "", value)
     }
 
     #[inline]
-    pub fn push_value_path(&mut self, path: &str, value: TransoftmedData) {
+    pub fn push_value_path(&mut self, path: &str, value: TransoftmedData) -> Option<&mut TransoftmedData> {
+        let path_ = path.trim_matches('.');
+        if path_.is_empty() && !path.is_empty() {
+            return self.push_value( path, value);    
+        }
+        let path = path_;
         let key_list:  Vec<&str>  = path.split('.').collect();
         if key_list.len() == 1 {
-            self.push_value(value, path);    
-            return
+            return self.push_value(path, value);    
         }
 
         let mut last_data = Some(self);
         for (idx, ele) in key_list.iter().enumerate() {
             if idx == key_list.len() -1 {
-                last_data.unwrap().push_value(value, ele);
-                break;
+                return last_data.unwrap().push_value( ele, value);
             }
+            let ele_string = ele.to_string();
             let step_data = TransoftmedData::Dict(TransoftmedData::create_data_map());
-            last_data = last_data.unwrap().push_value(step_data, ele);
+                
+            last_data = last_data.map(|ld| {
+                let exists = !ld.is_empty() && ld.exract_dict().contains_key(&ele_string);
+                if exists {
+                    ld.exract_dict_mut().get_mut(&ele_string)
+                } else {
+                    ld.push_value( ele, step_data)
+                }
+            }).unwrap();
+            
             
         }
+        return None;
+    }
+
+    fn to_string(&self) -> String {
+        serde_json::to_string(self).ok().unwrap()
     }
 }
 
@@ -225,7 +305,8 @@ fn transform_html_single<'a, 'b>(
         let text = if attr_name == "text" { selected_soup.text().collect::<Vec<_>>().join(" ") } 
                            else { handle_attr(selected_soup, attr_name) };
         
-        let handled_text = handle_regex(&rule.regex_sub_value, &text.trim());
+        let handled_text = if !rule.regex_sub_value.is_empty() { handle_regex(&rule.regex_sub_value, &text.trim()) }
+                                   else { text.trim().to_string() };
         
         transformed_data_out.push_value_path(&mappting, TransoftmedData::Value(String::from(handled_text)));
         
@@ -272,7 +353,7 @@ pub fn transform_html<'a, 'b, 'c>(
     transform_html_inner(&mut data, html, rules)?;
     match data {
         TransoftmedData::Dict(d) => Ok(d),
-        _ => panic!(),
+        _ => panic!("transform_html {UNSUPPORTED_ENUM_TYPE}"),
     }
 }
 
@@ -290,20 +371,73 @@ pub fn transform_html_list<'a, 'b, 'c>(
 #[cfg(test)]
 mod tests {
     use tracing::Level;
+    use tracing_subscriber::registry::Data;
 
     use super::*;
 
     #[test]
-    fn test() {
-        type rl<'c> = ParserTransfromRule<'c>;
-        tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
+    fn json_test() {
         
+        let mut data = TransoftmedData::create_dict();
+        let lst = data.push_value_path("test.a.b", TransoftmedData::create_list()).unwrap();
+        {
+            lst.push_value_to_list("1".into());
+            lst.push_value_to_list("2".into());
+            lst.push_value_to_list("3".into());
+        }
+        let j = serde_json::to_string(&data).ok().unwrap();
+        // std::println!("json data: {}", j);
+        let json_expected = r#"{"test":{"a":{"b":["1","2","3"]}}}"#;
+        assert_eq!(j, json_expected);
+
+        let j = data.to_string();
+        assert_eq!(j, json_expected);
+
+        let j: String = data.into();
+        assert_eq!(j, json_expected);
+    }
+
+    #[test]
+    fn path_value_test() {
+        let mut data = TransoftmedData::create_dict();
+        
+        data.push_value_path("another_one", "one".into());
+        data.push_value_path(".", "dot".into());
+        data.push_value_path("....", "dots".into());
+        
+        data.push_value_path("test.a.b", TransoftmedData::Value("1".to_string()));
+        data.push_value_path("test.a.c", "1".into());
+        data.push_value_path("test.a.d.", "2".to_string().into());
+        
+        std::println!("{:?}", data);
+        
+        let panic_caught = std::panic::catch_unwind(|| {
+            let _ = TransoftmedData::create_dict().push_value_path("", "2".to_string().into());
+            
+        }).is_err();
+        assert!(panic_caught, "expected panic after empty key");
+    }
+
+
+
+    #[test]
+    fn main_test() {
+        type rl<'c> = ParserTransfromRule<'c>;
+        // tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
+        // tracing_subscriber::fmt().with_env_filter("declarative_scraper::transform_html").init();
+        
+
 
         let html = r#"
             <ul>
                 <li class="test">Foo</li>
                 <li>Bar</li>
                 <li>Baz</li>
+            </ul>
+            <ul>
+                <li class="test1">Foo1</li>
+                <li>Bar1</li>
+                <li>Baz1</li>
             </ul>
         "#;
 
@@ -313,7 +447,7 @@ mod tests {
             &rl{selector: String::from("li"), mapping: String::from("lis"), ..Default::default() },
 
         ]).expect("Err");
-        println!(" > > > {:?}", data);
+        assert_eq!(data["place"], TransoftmedData::from("Foo"))
     }
 
     #[test]
@@ -401,82 +535,4 @@ path/to/baz:3:It's a Trap!
 
         Ok(())
     }
-}
-
-// Troubles with collection & refs without Boxing or Arc
-// see: https://users.rust-lang.org/t/how-to-deal-with-cow-str-in-a-hashmap-vector/87223/7
-#[cfg(test)]
-mod example {
-
-    use std::borrow::Cow;
-    use std::collections::{HashMap, hash_map::Entry};
-    use std::mem::take;
-    use urlencoding::decode as url_decode;
-
-    #[derive(Debug)]
-    pub struct QueryString<'buf> {
-        data: HashMap<Cow<'buf, str>, Value<'buf>>,
-    }
-
-    #[derive(Debug)]
-    pub enum Value<'buf> {
-        Single(Cow<'buf, str>),
-        Multiple(Vec<Cow<'buf, str>>),
-    }
-
-    impl<'buf> QueryString<'buf> {
-        pub fn get(&self, key: &str) -> Option<&Value> {
-            self.data.get(key)
-        }
-    }
-
-    impl<'buf> From<&'buf str> for QueryString<'buf> {
-        fn from(s: &'buf str) -> Self {
-            let mut data = HashMap::new();
-
-            for sub_str in s.split('&') {
-                let mut parts = sub_str.splitn(2, '=');
-                let key = decode(parts.next().unwrap_or_default());
-                let val = decode(parts.next().unwrap_or_default());
-
-                match data.entry(key) {
-                    Entry::Occupied(mut entry) => {
-                        let existing = entry.get_mut();
-                        match existing {
-                            Value::Single(prev_val) => {
-                                *existing = Value::Multiple(vec![take(prev_val), val]);
-                            }
-                            Value::Multiple(vec) => vec.push(val),
-                        };
-                    },
-                    Entry::Vacant(entry) => {
-                        entry.insert(Value::Single(val));
-                    }
-                };
-            }
-
-            QueryString { data }
-        }
-    }
-
-    fn decode<'a>(str: &'a str) -> Cow<'a, str> {
-        match url_decode(str) {
-            Ok(decoded) => decoded,
-            Err(_) => str.into()
-        }
-    }
-
-    use std::println;
-
-    use super::TransoftmedData;
-
-    #[test]
-    fn example_test() {
-        let q = QueryString::from("https://www.google.com/xs/uu/search?q=rust+errors+crate&q=rust+errors+crate&q=rust+errors+crate");
-        println!("{:?}", q)
-
-    }
-
-    
-
 }
