@@ -57,12 +57,12 @@ impl ParserTransfromRule<'_> {
     }
 }
 
-type DataMap = Box<HashMap<String, TransoftmedData>>;
-type DataVec = Box<Vec<TransoftmedData>>;
+type DataMap = Box<HashMap<String, TransformedData>>;
+type DataVec = Box<Vec<TransformedData>>;
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
-pub enum TransoftmedData {
+pub enum TransformedData {
     Dict(DataMap),
     List(DataVec),
     Value(String),
@@ -70,56 +70,56 @@ pub enum TransoftmedData {
 
 const UNSUPPORTED_ENUM_TYPE: &str = "with unsupported TransformData enum type";
 
-impl From<String> for TransoftmedData {
+impl From<String> for TransformedData {
     fn from(value: String) -> Self {
-        TransoftmedData::Value(value)
+        TransformedData::Value(value)
     }
 }
-impl From<&'_ str> for TransoftmedData {
+impl From<&'_ str> for TransformedData {
     fn from(value: &'_ str) -> Self {
-        TransoftmedData::Value(value.to_string())
+        TransformedData::Value(value.to_string())
     }
 }
-impl From<DataMap> for TransoftmedData {
+impl From<DataMap> for TransformedData {
     fn from(value: DataMap) -> Self {
-        TransoftmedData::Dict(value)
+        TransformedData::Dict(value)
     }
 }
-impl From<DataVec> for TransoftmedData {
+impl From<DataVec> for TransformedData {
     fn from(value: DataVec) -> Self {
-        TransoftmedData::List(value)
+        TransformedData::List(value)
     }
 }
-impl From<HashMap<String, TransoftmedData>> for TransoftmedData {
-    fn from(value: HashMap<String, TransoftmedData>) -> Self {
-        TransoftmedData::Dict(Box::new(value))
+impl From<HashMap<String, TransformedData>> for TransformedData {
+    fn from(value: HashMap<String, TransformedData>) -> Self {
+        TransformedData::Dict(Box::new(value))
     }
 }
-impl From<Vec<TransoftmedData>> for TransoftmedData {
-    fn from(value: Vec<TransoftmedData>) -> Self {
-        TransoftmedData::List(Box::new(value))
+impl From<Vec<TransformedData>> for TransformedData {
+    fn from(value: Vec<TransformedData>) -> Self {
+        TransformedData::List(Box::new(value))
     }
 }
-impl Into<String> for TransoftmedData {
+impl Into<String> for TransformedData {
     fn into(self) -> String {
         match self {
-            TransoftmedData::Value(s) => s,
+            TransformedData::Value(s) => s,
             _ => self.to_string()
         }
     }
 }
 
 
-impl TransoftmedData {
+impl TransformedData {
     pub fn create_data_map() -> DataMap { Box::new(HashMap::new()) }
     pub fn create_data_vec() -> DataVec { Box::new(Vec::new()) }
-    pub fn create_dict() -> Self { TransoftmedData::Dict(TransoftmedData::create_data_map()) }
-    pub fn create_list() -> Self { TransoftmedData::List(TransoftmedData::create_data_vec()) }
+    pub fn create_dict() -> Self { TransformedData::Dict(TransformedData::create_data_map()) }
+    pub fn create_list() -> Self { TransformedData::List(TransformedData::create_data_vec()) }
 
     pub fn prepare_dict(&mut self) -> &mut DataMap {
         let wrapper = self.as_map_wrapper();
         let dict = match wrapper {
-            TransoftmedData::Dict(dict) => dict,
+            TransformedData::Dict(dict) => dict,
             _ => panic!("prepare_dict {UNSUPPORTED_ENUM_TYPE}"),
         };
         dict
@@ -127,50 +127,50 @@ impl TransoftmedData {
 
     pub fn is_empty(&self) -> bool {
         match self {
-            TransoftmedData::Dict(dict) => dict.is_empty(),
-            TransoftmedData::List(list) => list.is_empty(),
-            TransoftmedData::Value(string) => string.is_empty(),
+            TransformedData::Dict(dict) => dict.is_empty(),
+            TransformedData::List(list) => list.is_empty(),
+            TransformedData::Value(string) => string.is_empty(),
         }
     }
 
     pub fn as_map_wrapper(&mut self) -> &mut Self {
         match self {
-            TransoftmedData::List(lst) => {
-                lst.push(TransoftmedData::Dict(TransoftmedData::create_data_map()));
+            TransformedData::List(lst) => {
+                lst.push(TransformedData::Dict(TransformedData::create_data_map()));
                 let idx = lst.len() -1;
                 let contained = lst.get_mut(idx);
                 contained.unwrap()
             },
-            TransoftmedData::Dict(dict) => self,
+            TransformedData::Dict(dict) => self,
             _ => panic!("as_map_wrapper {UNSUPPORTED_ENUM_TYPE}"),
         }
     }
 
     pub fn exract_dict(&self) -> &DataMap {
         return  match self {
-            TransoftmedData::Dict(dict) => dict,
+            TransformedData::Dict(dict) => dict,
             _ => panic!("extract_dict {UNSUPPORTED_ENUM_TYPE}"),
         }
     }
 
     pub fn exract_dict_mut(&mut self) -> &mut DataMap {
         return  match self {
-            TransoftmedData::Dict(dict) => dict,
+            TransformedData::Dict(dict) => dict,
             _ => panic!("extract_dict_mut {UNSUPPORTED_ENUM_TYPE}"),
         }
     }
 
     #[inline]
-    pub fn push_value(&mut self, key: &str, value: TransoftmedData) -> Option<&mut TransoftmedData> {
+    pub fn push_value(&mut self, key: &str, value: TransformedData) -> Option<&mut TransformedData> {
         match self {
-            TransoftmedData::Dict(dict) => {
+            TransformedData::Dict(dict) => {
                 if key.is_empty() {
                     panic!("push_value with empty key")
                 }
                 dict.insert(String::from(key), value);
                 dict.get_mut(key)
             },
-            TransoftmedData::List(lst) => {
+            TransformedData::List(lst) => {
                 lst.push(value);
                 let idx = lst.len() -1;
                 lst.get_mut(idx)
@@ -180,12 +180,12 @@ impl TransoftmedData {
     }
 
     #[inline]
-    pub fn push_value_to_list(&mut self, value: TransoftmedData) -> Option<&mut TransoftmedData> {
+    pub fn push_value_to_list(&mut self, value: TransformedData) -> Option<&mut TransformedData> {
         self.push_value( "", value)
     }
 
     #[inline]
-    pub fn push_value_path(&mut self, path: &str, value: TransoftmedData) -> Option<&mut TransoftmedData> {
+    pub fn push_value_path(&mut self, path: &str, value: TransformedData) -> Option<&mut TransformedData> {
         let path_ = path.trim_matches('.');
         if path_.is_empty() && !path.is_empty() {
             return self.push_value( path, value);    
@@ -202,7 +202,7 @@ impl TransoftmedData {
                 return last_data.unwrap().push_value( ele, value);
             }
             let ele_string = ele.to_string();
-            let step_data = TransoftmedData::Dict(TransoftmedData::create_data_map());
+            let step_data = TransformedData::Dict(TransformedData::create_data_map());
                 
             last_data = last_data.map(|ld| {
                 let exists = !ld.is_empty() && ld.exract_dict().contains_key(&ele_string);
@@ -224,7 +224,7 @@ impl TransoftmedData {
 }
 
 fn transform_html_single<'a, 'b>(
-    transformed_data: &mut TransoftmedData,
+    transformed_data: &mut TransformedData,
     soup: &'b scraper::ElementRef,
     rule: &'a ParserTransfromRule<'a>,
     level: usize,
@@ -245,7 +245,7 @@ fn transform_html_single<'a, 'b>(
         return String::from(attr.unwrap_or(""));
     };
     
-    let transformed_data_out: &mut TransoftmedData = if !rule.grouping.is_empty() {
+    let transformed_data_out: &mut TransformedData = if !rule.grouping.is_empty() {
         transformed_data.as_map_wrapper()
     } else {
         transformed_data
@@ -268,7 +268,7 @@ fn transform_html_single<'a, 'b>(
         if tags.len() > 1 {
             let nested_rule = rule.with_empty_selector();
             match transformed_data_out {
-                TransoftmedData::List(lst) => {
+                TransformedData::List(lst) => {
                     for ele in tags {
                         debug!("push list one");
                         transform_html_single(transformed_data_out, &ele, &nested_rule, level+1, limit)?
@@ -276,7 +276,7 @@ fn transform_html_single<'a, 'b>(
                     return Ok(());
                 },
                 _ => {
-                    let mut nested_data = TransoftmedData::List(TransoftmedData::create_data_vec());
+                    let mut nested_data = TransformedData::List(TransformedData::create_data_vec());
                     for ele in tags {
                         debug!("push dict one");
                         transform_html_single(&mut nested_data, &ele, &nested_rule, level+1, limit)?
@@ -308,7 +308,7 @@ fn transform_html_single<'a, 'b>(
         let handled_text = if !rule.regex_sub_value.is_empty() { handle_regex(&rule.regex_sub_value, &text.trim()) }
                                    else { text.trim().to_string() };
         
-        transformed_data_out.push_value_path(&mappting, TransoftmedData::Value(String::from(handled_text)));
+        transformed_data_out.push_value_path(&mappting, TransformedData::Value(String::from(handled_text)));
         
 
     }
@@ -321,7 +321,7 @@ fn transform_html_single<'a, 'b>(
 }
 
 fn transform_html_multi<'a, 'b>(
-    transoftmed_data: &mut TransoftmedData,
+    transoftmed_data: &mut TransformedData,
     soup: &'b scraper::ElementRef,
     rules: &[&'a ParserTransfromRule<'a>],
     level: usize,
@@ -335,7 +335,7 @@ fn transform_html_multi<'a, 'b>(
 }
 
 fn transform_html_inner<'a, 'b, 'c>(
-    transformed_data: &'c mut TransoftmedData,
+    transformed_data: &'c mut TransformedData,
     html: &'b str,
     rules: &[&'a ParserTransfromRule<'a>],
 ) -> Result<(), Box<dyn Error>>   {
@@ -349,10 +349,10 @@ pub fn transform_html<'a, 'b, 'c>(
     html: &'b str,
     rules: &[&'a ParserTransfromRule<'a>],
 ) -> Result<DataMap, Box<dyn Error>>   {
-    let mut data = TransoftmedData::Dict(TransoftmedData::create_data_map());
+    let mut data = TransformedData::Dict(TransformedData::create_data_map());
     transform_html_inner(&mut data, html, rules)?;
     match data {
-        TransoftmedData::Dict(d) => Ok(d),
+        TransformedData::Dict(d) => Ok(d),
         _ => panic!("transform_html {UNSUPPORTED_ENUM_TYPE}"),
     }
 }
@@ -363,7 +363,7 @@ pub fn transform_html_list<'a, 'b, 'c>(
     html: &'b str,
     rules: &[&'a ParserTransfromRule<'a>],
 ) -> Result<(), Box<dyn Error>>   {
-    let mut data = TransoftmedData::List(transformed_data);
+    let mut data = TransformedData::List(transformed_data);
     transform_html_inner(&mut data, html, rules)
 }
 
@@ -378,8 +378,8 @@ mod tests {
     #[test]
     fn json_test() {
         
-        let mut data = TransoftmedData::create_dict();
-        let lst = data.push_value_path("test.a.b", TransoftmedData::create_list()).unwrap();
+        let mut data = TransformedData::create_dict();
+        let lst = data.push_value_path("test.a.b", TransformedData::create_list()).unwrap();
         {
             lst.push_value_to_list("1".into());
             lst.push_value_to_list("2".into());
@@ -399,20 +399,20 @@ mod tests {
 
     #[test]
     fn path_value_test() {
-        let mut data = TransoftmedData::create_dict();
+        let mut data = TransformedData::create_dict();
         
         data.push_value_path("another_one", "one".into());
         data.push_value_path(".", "dot".into());
         data.push_value_path("....", "dots".into());
         
-        data.push_value_path("test.a.b", TransoftmedData::Value("1".to_string()));
+        data.push_value_path("test.a.b", TransformedData::Value("1".to_string()));
         data.push_value_path("test.a.c", "1".into());
         data.push_value_path("test.a.d.", "2".to_string().into());
         
         std::println!("{:?}", data);
         
         let panic_caught = std::panic::catch_unwind(|| {
-            let _ = TransoftmedData::create_dict().push_value_path("", "2".to_string().into());
+            let _ = TransformedData::create_dict().push_value_path("", "2".to_string().into());
             
         }).is_err();
         assert!(panic_caught, "expected panic after empty key");
@@ -447,29 +447,29 @@ mod tests {
             &rl{selector: String::from("li"), mapping: String::from("lis"), ..Default::default() },
 
         ]).expect("Err");
-        assert_eq!(data["place"], TransoftmedData::from("Foo"))
+        assert_eq!(data["place"], TransformedData::from("Foo"))
     }
 
     #[test]
     fn check_expand_data<'c>() {
-        let consumer = |td1: &mut TransoftmedData| {
+        let consumer = |td1: &mut TransformedData| {
                 
             // let td1_b = td1.borrow_mut();
 
-            let  td3: &mut TransoftmedData = match td1 {
-                TransoftmedData::List(lst) => {
-                    lst.push(TransoftmedData::Dict(TransoftmedData::create_data_map()));
+            let  td3: &mut TransformedData = match td1 {
+                TransformedData::List(lst) => {
+                    lst.push(TransformedData::Dict(TransformedData::create_data_map()));
                     let idx = lst.len() -1;
                     let contained = lst.get_mut(idx);
                     contained.unwrap()
                 },
-                TransoftmedData::Dict(_) => td1,
+                TransformedData::Dict(_) => td1,
                 _ => td1,
             };
             
         };
         
-        let mut td1 = TransoftmedData::List(TransoftmedData::create_data_vec());
+        let mut td1 = TransformedData::List(TransformedData::create_data_vec());
         consumer(&mut td1);    
     }
 }
