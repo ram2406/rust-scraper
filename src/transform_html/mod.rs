@@ -1,15 +1,9 @@
-use derive_more::{Display, Error};
 use regex::Regex;
 use scraper;
-use serde;
-use serde::{Deserialize, Serialize};
-use serde_json;
-use std::collections::HashMap;
-use std::fmt;
 use std::vec::Vec;
 use std::{error::Error, str};
 
-use tracing::{debug, info};
+use tracing::debug;
 
 mod def;
 use def::*;
@@ -17,12 +11,12 @@ use def::*;
 fn transform_html_single<'a, 'b>(
     transformed_data: &mut TransformedData,
     soup: &'b scraper::ElementRef,
-    rule: &'a ParserTransfromRule<'a>,
+    rule: &'a ParserTransfromRule,
     level: usize,
-    limit: usize,
-) -> Result<(), Box<dyn Error>> {
-    if level >= limit {
-        return Err(Box::new(RecursiveError { level: limit }));
+    settings: &TransformSettings,
+) -> Result<(), TransformError > {
+    if level >= settings.max_depth_level {
+        return Err(TransformError::RecursiveError { level });
     }
 
     let handle_regex = |rx: &Vec<String>, txt: &str| {
@@ -50,9 +44,9 @@ fn transform_html_single<'a, 'b>(
         tags.extend(soup.select(&sc_selector));
 
         if tags.len() == 0 && rule.exception_on_not_found {
-            return Err(Box::new(AtLeastOneTagNotFoundError {
+            return Err(TransformError::AtLeastOneTagNotFoundError {
                 tag_name: rule.selector.clone(),
-            }));
+            });
         }
         if tags.len() == 0 {
             return Ok(());
@@ -68,7 +62,7 @@ fn transform_html_single<'a, 'b>(
                             &ele,
                             &nested_rule,
                             level + 1,
-                            limit,
+                            settings,
                         )?
                     }
                     return Ok(());
@@ -82,7 +76,7 @@ fn transform_html_single<'a, 'b>(
                             &ele,
                             &nested_rule,
                             level + 1,
-                            limit,
+                            settings,
                         )?
                     }
                     let key_name = if !nested_rule.grouping.is_empty() {
@@ -135,7 +129,7 @@ fn transform_html_single<'a, 'b>(
     }
 
     if !rule.children.is_empty() {
-        transform_html_multi(transformed_data_out, soup, &rule.children, level, limit)?;
+        transform_html_multi(transformed_data_out, soup, rule.children.as_slice(), level, settings)?;
     }
 
     Ok(())
@@ -144,12 +138,12 @@ fn transform_html_single<'a, 'b>(
 fn transform_html_multi<'a, 'b>(
     transoftmed_data: &mut TransformedData,
     soup: &'b scraper::ElementRef,
-    rules: &[&'a ParserTransfromRule<'a>],
+    rules: &[ParserTransfromRule],
     level: usize,
-    limit: usize,
-) -> Result<(), Box<dyn Error>> {
+    settings: &TransformSettings,
+) -> Result<(), TransformError> {
     for ele in rules {
-        transform_html_single(transoftmed_data, soup, ele, level, limit)?
+        transform_html_single(transoftmed_data, soup, ele, level, settings)?
     }
     Ok(())
 }
@@ -157,20 +151,22 @@ fn transform_html_multi<'a, 'b>(
 fn transform_html_inner<'a, 'b, 'c>(
     transformed_data: &'c mut TransformedData,
     html: &'b str,
-    rules: &[&'a ParserTransfromRule<'a>],
-) -> Result<(), Box<dyn Error>> {
+    rules: &[ParserTransfromRule],
+    settings: &TransformSettings,
+) -> Result<(), TransformError> {
     let parsed = scraper::Html::parse_document(html);
     let soup = parsed.root_element();
-    transform_html_multi(transformed_data, &soup, rules, 1, 100)
+    transform_html_multi(transformed_data, &soup, rules, 1, settings)
 }
 
 #[inline]
 pub fn transform_html<'a, 'b, 'c>(
     html: &'b str,
-    rules: &[&'a ParserTransfromRule<'a>],
-) -> Result<DataMap, Box<dyn Error>> {
+    rules: &[ParserTransfromRule],
+    settings: &TransformSettings,
+) -> Result<DataMap, TransformError> {
     let mut data = TransformedData::Dict(TransformedData::create_data_map());
-    transform_html_inner(&mut data, html, rules)?;
+    transform_html_inner(&mut data, html, rules, settings)?;
     match data {
         TransformedData::Dict(d) => Ok(d),
         _ => panic!("transform_html {UNSUPPORTED_ENUM_TYPE}"),
@@ -180,14 +176,17 @@ pub fn transform_html<'a, 'b, 'c>(
 pub fn transform_html_list<'a, 'b, 'c>(
     transformed_data: DataVec,
     html: &'b str,
-    rules: &[&'a ParserTransfromRule<'a>],
-) -> Result<(), Box<dyn Error>> {
+    rules: &[ParserTransfromRule],
+    settings: &TransformSettings,
+) -> Result<(), TransformError> {
     let mut data = TransformedData::List(transformed_data);
-    transform_html_inner(&mut data, html, rules)
+    transform_html_inner(&mut data, html, rules, settings)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use tracing::Level;
     use tracing_subscriber::registry::Data;
 
@@ -195,7 +194,7 @@ mod tests {
 
     #[test]
     fn main_test() {
-        type rl<'c> = ParserTransfromRule<'c>;
+        type rl = ParserTransfromRule;
         // tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
         // tracing_subscriber::fmt().with_env_filter("declarative_scraper::transform_html").init();
 
@@ -211,36 +210,116 @@ mod tests {
                 <li>Baz1</li>
             </ul>
         "#;
-
+        let rules = [
+            rl {
+                selector: String::from(".test"),
+                mapping: String::from("place"),
+                ..Default::default()
+            },
+            rl {
+                selector: String::from("ul"),
+                mapping: String::from("ul"),
+                ..Default::default()
+            },
+            rl {
+                selector: String::from("li"),
+                mapping: String::from("lis"),
+                ..Default::default()
+            },
+            rl::from_str(r#"{ "selector": ".test1", "mapping": "test_json" }"#).unwrap(),
+        ];
         let data = transform_html(
             html,
-            &[
-                &rl {
-                    selector: String::from(".test"),
-                    mapping: String::from("place"),
-                    ..Default::default()
-                },
-                &rl {
-                    selector: String::from("ul"),
-                    mapping: String::from("ul"),
-                    ..Default::default()
-                },
-                &rl {
-                    selector: String::from("li"),
-                    mapping: String::from("lis"),
-                    ..Default::default()
-                },
-            ],
+            &rules,
+            &TransformSettings::default()
         )
         .expect("Err");
-        assert_eq!(data["place"], TransformedData::from("Foo"))
+        assert_eq!(data["place"], TransformedData::from("Foo"));
+        assert_eq!(data["test_json"], "Foo1".into());
     }
 
+    #[test]
+    fn err_test() {
+        type rl<'c> = ParserTransfromRule;
+        
+        let html = r#"
+            <div>
+            <div>
+            <ul>
+                <li class="test">Foo</li>
+                <li>Bar</li>
+                <li>Baz</li>
+            </ul>
+            <ul>
+                <li class="test1">Foo1</li>
+                <li>Bar1</li>
+                <li>Baz1</li>
+            </ul>
+            </div>
+            </div>
+        "#;
+
+        let rules = [
+            rl {
+                selector: String::from("li"),
+                mapping: String::from("place"),
+                ..Default::default()
+            },
+            rl {
+                selector: "h1".to_string(),
+                mapping: "h1_empty".into(),
+                exception_on_not_found: true,
+                ..Default::default()
+            },
+        ];
+
+        let mut transformed_data = TransformedData::create_dict();
+        let doc = scraper::Html::parse_document(html);
+        match transform_html_single(&mut transformed_data, &doc.root_element(), &rules[0], 1, &TransformSettings { max_depth_level: 2 }) {
+            Ok(_) => panic!("error is missing"),
+            Err(err) => { 
+                println!("{}", err);
+                println!("{:?}", err);
+            },
+        };
+
+        match transform_html_single(&mut transformed_data, &doc.root_element(), &rules[1], 0, &TransformSettings::default()) {
+            Ok(_) => panic!("error is missing"),
+            Err(err) => { 
+                println!("{}", err);
+                println!("{:?}", err);
+            },
+        };
+        
+    }
+
+    #[test]
+    fn test_err_kind() {
+        use std::fs::File;
+        use std::io::ErrorKind;
+
+        let greeting_file_result = File::open("hello.txt");
+
+        let greeting_file = match greeting_file_result {
+            Ok(file) => file,
+            Err(error) => match error.kind() {
+                ErrorKind::NotFound => match File::create("target/hello.txt") {
+                    Ok(fc) => fc,
+                    Err(e) => panic!("Problem creating the file: {:?}", e),
+                },
+                other_error => {
+                    panic!("Problem opening the file: {:?}", other_error);
+                }
+
+            },
+        };
+    }
 }
 
 #[cfg(test)]
 mod deps_tests {
     use std::error::Error;
+    use tracing::info;
 
     use super::*;
 

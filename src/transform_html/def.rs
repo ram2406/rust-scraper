@@ -1,15 +1,39 @@
-use derive_more::{Display, Error};
-use regex::Regex;
-use scraper;
+use derive_more::{Display, Error, From};
 use serde;
 use serde::{Deserialize, Serialize};
 use serde_json;
+use tracing_subscriber::field::display;
 use std::collections::HashMap;
-use std::fmt;
+use std::error::Error;
 use std::vec::Vec;
-use std::{error::Error, str};
+use std::str::{self, FromStr};
 
-use tracing::{debug, info};
+#[derive(Debug)]
+pub struct TransformSettings {
+    pub max_depth_level: usize,
+}
+
+impl Default for TransformSettings {
+    fn default() -> TransformSettings {
+        TransformSettings {
+            max_depth_level: 10000,
+        }
+    }
+}
+
+
+#[derive(Debug, Clone, Error, Display)]
+pub enum TransformError {
+    #[display(fmt="recursive limit is reached [{}]", level)]
+    RecursiveError {
+        level: usize,
+    },
+    #[display(fmt = "at least one tag for selector is not found [{}]", tag_name)]
+    AtLeastOneTagNotFoundError {
+        tag_name: String,
+    },
+}
+
 
 #[derive(Debug, Clone, Error, Display)]
 #[display(fmt = "recursive limit is reached [{}]", level)]
@@ -23,24 +47,38 @@ pub struct AtLeastOneTagNotFoundError {
     pub tag_name: String,
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct ParserTransfromRule<'a> {
+#[derive(Debug, Default, Clone, Deserialize, Serialize, From,)]
+#[serde(default)]
+pub struct ParserTransfromRule {
     pub selector: String,
     pub mapping: String,
     pub attribute_name: String,
     pub regex_sub_value: Vec<String>,
-    pub children: Vec<&'a ParserTransfromRule<'a>>,
+    pub children: Vec<ParserTransfromRule>,
     pub grouping: String,
     pub exception_on_not_found: bool,
 }
 
-impl ParserTransfromRule<'_> {
+#[allow(dead_code)]
+impl ParserTransfromRule {
     #[inline]
     pub fn with_empty_selector(&self) -> Self {
         Self {
             selector: Default::default(),
             ..self.clone()
         }
+    }
+}
+
+#[derive(From, Debug)]
+#[from(forward)]
+pub struct ParserTransfromRuleError(serde_json::Error);
+
+impl FromStr for ParserTransfromRule {
+    type Err = ParserTransfromRuleError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str::<ParserTransfromRule>(s).map_err(|err| err.into())
     }
 }
 
@@ -96,6 +134,7 @@ impl Into<String> for TransformedData {
     }
 }
 
+#[allow(dead_code)]
 impl TransformedData {
     pub fn create_data_map() -> DataMap {
         Box::new(HashMap::new())
@@ -131,11 +170,9 @@ impl TransformedData {
         match self {
             TransformedData::List(lst) => {
                 lst.push(TransformedData::Dict(TransformedData::create_data_map()));
-                let idx = lst.len() - 1;
-                let contained = lst.get_mut(idx);
-                contained.unwrap()
+                lst.last_mut().unwrap()
             }
-            TransformedData::Dict(dict) => self,
+            TransformedData::Dict(_) => self,
             _ => panic!("as_map_wrapper {UNSUPPORTED_ENUM_TYPE}"),
         }
     }
@@ -170,8 +207,7 @@ impl TransformedData {
             }
             TransformedData::List(lst) => {
                 lst.push(value);
-                let idx = lst.len() - 1;
-                lst.get_mut(idx)
+                lst.last_mut()
             }
             _ => panic!("push_value {UNSUPPORTED_ENUM_TYPE}"),
         }
@@ -225,12 +261,8 @@ impl TransformedData {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
-    use tracing::Level;
-    use tracing_subscriber::registry::Data;
 
     use super::*;
 
@@ -283,12 +315,10 @@ mod tests {
         let consumer = |td1: &mut TransformedData| {
             // let td1_b = td1.borrow_mut();
 
-            let td3: &mut TransformedData = match td1 {
+            let _: &mut TransformedData = match td1 {
                 TransformedData::List(lst) => {
                     lst.push(TransformedData::Dict(TransformedData::create_data_map()));
-                    let idx = lst.len() - 1;
-                    let contained = lst.get_mut(idx);
-                    contained.unwrap()
+                    lst.last_mut().unwrap()
                 }
                 TransformedData::Dict(_) => td1,
                 _ => td1,
@@ -301,11 +331,11 @@ mod tests {
 
     #[test]
     fn check_iter_windows<'c>() {
-        let vec = vec![1,2,3];
+        let vec = vec![1, 2, 3];
         for it in vec.windows(2) {
             let [prev, cur] = it else { panic!() };
             println!("= {:?} {:?}", prev, cur);
-        };
+        }
         println!("{:?}", vec);
     }
 }
