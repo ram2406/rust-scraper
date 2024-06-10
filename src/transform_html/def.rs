@@ -329,6 +329,37 @@ mod tests {
         consumer(&mut td1);
     }
 
+    
+
+    
+}
+
+#[cfg(test)]
+mod std_tests {
+    use super::*;
+
+    #[test]
+    fn check_traits() {
+        trait MixType { fn test(&self); }
+        
+        trait MyError : Error + MixType {
+            fn message(&self) -> &str { "MyError default msg"} 
+        }
+        
+        #[derive(Display, Debug)]
+        struct MyErrorSpec{}
+        
+        impl MixType    for MyErrorSpec {  fn test(&self) { todo!() }  }
+        impl Error      for MyErrorSpec {    }
+        impl MyError    for MyErrorSpec {    }
+
+        let consumer = |me: &dyn MyError| {
+            println!("err msg: [{}]", me.message())
+        };
+        let mec = MyErrorSpec{};
+        consumer(&mec);
+    }
+
     #[test]
     fn check_iter_windows<'c>() {
         let vec = vec![1, 2, 3];
@@ -338,4 +369,5 @@ mod tests {
         }
         println!("{:?}", vec);
     }
+    
 }
