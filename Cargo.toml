@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 name = "transform_html_lib"
-path = "src/transform_html.rs"
+path = "src/lib.rs"
 
 [[bin]]
 name = "transform_html"
@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 
 [dependencies]
+derive_more = "0.99.17"
 regex = "1.10.4"
 reqwest = "0.12.4"
 scraper = "0.19.0"
