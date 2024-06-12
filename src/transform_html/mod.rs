@@ -1,12 +1,12 @@
 use regex::Regex;
 use scraper;
 use std::vec::Vec;
-use std::{error::Error, str};
+use std::str;
 
 use tracing::debug;
 
-mod def;
-use def::*;
+pub mod defs;
+use defs::*;
 
 fn transform_html_single<'a, 'b>(
     transformed_data: &mut TransformedData,
@@ -184,11 +184,9 @@ pub fn transform_html_list<'a, 'b, 'c>(
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 mod tests {
     use std::str::FromStr;
-
-    use tracing::Level;
-    use tracing_subscriber::registry::Data;
 
     use super::*;
 
@@ -240,7 +238,7 @@ mod tests {
 
     #[test]
     fn err_test() {
-        type rl<'c> = ParserTransfromRule;
+        type RL<'c> = ParserTransfromRule;
         
         let html = r#"
             <div>
@@ -260,12 +258,12 @@ mod tests {
         "#;
 
         let rules = [
-            rl {
+            RL {
                 selector: String::from("li"),
                 mapping: String::from("place"),
                 ..Default::default()
             },
-            rl {
+            RL {
                 selector: "h1".to_string(),
                 mapping: "h1_empty".into(),
                 exception_on_not_found: true,
@@ -317,6 +315,7 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 mod deps_tests {
     use std::error::Error;
     use tracing::info;

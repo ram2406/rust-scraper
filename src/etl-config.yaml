@@ -1,0 +1,355 @@
+dag:
+  - source_name: default
+    menu_pages_per_task: 50
+  - source_name: bayut
+    menu_pages_per_task: 50
+  - source_name: propertyfinder
+    menu_pages_per_task: 15
+
+http:
+  retries:
+    max_retries: 10
+    backoff_factor: 2
+    status_forcelist: [ 500, 502, 503, 504 ]
+    timeout: 30
+  headers:
+    user-agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36'
+    accept-language: 'en-US,en;q=0.5'
+sources:
+  - name: bayut
+    root_url: 'https://www.bayut.com'
+    menu:
+      page_limit: 2084 # max pages
+      cards_per_page: 24
+
+      default_url: /for-sale/property/uae/
+      page_url_sub: /page-\1
+      first_page_url: ''
+      rules:
+        - grouping: menu_items
+          selector: div[aria-label="Cover Photo"] a[aria-label="Listing link"]
+          children:
+            - mapping: Source Link
+              attribute_name: href
+            - mapping: url
+              attribute_name: href
+            - mapping: id
+              attribute_name: href
+              regex_sub_value: ['.*?(\d+).html', '\1']
+        - selector: span[aria-label="Summary text"]
+          mapping: cards_limit
+          regex_sub_value: ['.*? of (\d+)?,?(\d+)?,?(\d+)?,?(\d+)?,? .*', '\1\2\3\4']
+          
+    card:
+      rules:
+        - selector: div[aria-label="Property basic info"]
+          children:
+            - selector: div[aria-label="Property header"]
+              children:
+                - mapping: Title
+                - mapping: Address
+                - mapping: City
+                  regex_sub_value: ['(.*?, ?)([\w ]+)$', '\2']
+                - mapping: District
+                  regex_sub_value: ['(.*?)( ?([\w ]+), )?([\w ]+)?$', '\3']
+            - selector: span[aria-label="Currency"]
+              mapping: Currency
+            - selector: span[aria-label="Price"]
+              mapping: Price
+              regex_sub_value: ['[^\d+]', '']
+            - selector: span[aria-label="Beds"]
+              mapping: Room count
+              regex_sub_value: ['(\d+) .*', '\1']
+            - selector: span[aria-label="Baths"]
+              mapping: Bathroom count
+              regex_sub_value: ['(\d+) .*', '\1']
+            - selector: span[aria-label="Area"]
+              mapping: Area size
+              
+        - selector: div[aria-label="Property overview"]
+          children: 
+            - selector: span[aria-label="Type"]
+              mapping: 'Property Type'
+            - selector: span[aria-label="Purpose"]
+              mapping: 'Ad Type'
+            - selector: span[aria-label="Property furnishing status"]
+              mapping: 'Furniture'
+            - selector: div._96aa05ec:nth-child(3) > script:nth-child(2)
+              mapping: Coords Lat
+              regex_sub_value: 
+               - '.*?"geo":{"@type":"GeoCoordinates","latitude":(\d+.\d+),"longitude":(\d+.\d+).*'
+               - '\1'
+            - selector: div._96aa05ec:nth-child(3) > script:nth-child(2)
+              mapping: Coords Lng
+              regex_sub_value: 
+               - '.*?"geo":{"@type":"GeoCoordinates","latitude":(\d+.\d+),"longitude":(\d+.\d+).*'
+               - '\2'
+        - selector: div[aria-label="Select country"] button
+          mapping: Country
+        # District not found
+
+
+  - name: propertyfinder
+    root_url: 'https://www.propertyfinder.ae/'
+    menu:
+      page_limit: 10000 # max pages unlimited
+      cards_per_page: 25
+
+      default_url: /en/search?c=1&ob=mr
+      page_url_sub: '&page=\1'
+      first_page_url: '&page=1'
+      rules:
+        - selector: div.property-header__top-layout div.property-header__search-count
+          mapping: cards_limit
+          regex_sub_value: ['[^\d+]', '']
+        - grouping: menu_items
+          selector: ul[aria-label="Properties"][role="list"] li[role="listitem"] article
+          children:
+            - selector: a
+              children:
+              - mapping: url
+                attribute_name: href
+
+              - mapping: Source Link
+                attribute_name: href
+                regex_sub_value: [ '^(.*)$', 'https://www.propertyfinder.ae\1' ]
+              - mapping: ID
+                attribute_name: href
+                regex_sub_value: ['.*?(\d+).html', '\1']
+            - selector: .card-specifications__location-text
+              mapping: Address
+              children:
+                - mapping: City
+                  regex_sub_value: ['(.*?, ?)([\w ]+)$', '\2']
+                - mapping: District
+                  regex_sub_value: ['(.*?)( ?([\w ]+), )?([\w ]+)?$', '\3']
+    card:
+      rules:
+        - selector: span.global-switch__current-name
+          mapping: Country
+        - selector: .property-page__breadcrumb-area--desktop div.breadcrumb > a:nth-child(3)
+          attribute_name: href
+          regex_sub_value: ['.*?for-(.*?).html' , '\1']
+          mapping: Ad Type
+        - selector: '.property-page__sub-title'
+          children:
+            - mapping: Title
+            
+        - selector: ".property-page__column--left 
+                     .property-price__price"
+          children:
+            - mapping: Currency
+              regex_sub_value: ['.*?\s+?(\w+)', '\1']
+            - mapping: Price
+              regex_sub_value: ['[^\d+]', '']
+        - selector: ul.property-facts
+          children: 
+            - selector: "li.property-facts__item:-soup-contains(\"Property type:\") .property-facts__value"
+              mapping: 'Property Type'
+            - selector: "li.property-facts__item:-soup-contains(\"Property size:\") .property-facts__value > span:nth-child(1)"
+              mapping: 'Area size'
+              regex_sub_value: ['(\s+)', ' ']
+            - selector: "li.property-facts__item:-soup-contains(\"Bedrooms:\") .property-facts__value "
+              mapping: 'Room count'
+              regex_sub_value: ['[^\d+]', '']
+            - selector: "li.property-facts__item:-soup-contains(\"Bathrooms:\") .property-facts__value"
+              mapping: 'Bathroom count'
+              regex_sub_value: ['[^\d+]', '']
+        - selector: body script:-soup-contains("GeoCoordinates")
+          children:
+            - mapping: Coords Lat
+              regex_sub_value: 
+               - '.*?"geo":{"@type":"GeoCoordinates","latitude":(\d+.\d+),"longitude":(\d+.\d+).*'
+               - '\1'
+            - mapping: Coords Lng
+              regex_sub_value: 
+               - '.*?"geo":{"@type":"GeoCoordinates","latitude":(\d+.\d+),"longitude":(\d+.\d+).*'
+               - '\2'
+
+  - name: hepsiemlak
+    root_url: 'https://www.hepsiemlak.com/'
+    menu:
+      page_limit: 1
+      default_url: /en/satilik
+      rules:
+        - grouping: MenuItems
+          selector: div.list-view-content > div.links > a
+          children:
+            - mapping: url
+              attribute_name: href
+            - mapping: id
+              attribute_name: href
+              regex_sub_value: ['.*?(\d+-\d+)', '\1']
+    card:
+      rules:
+        - selector: 'h1.fontRB'
+          mapping: Title
+        - selector: '.fz24-text.price'
+          children:
+            - mapping: Currency
+              regex_sub_value: ['.*?\s+?(\w+)', '\1']
+            - mapping: Price
+              regex_sub_value: ['[^\d+]', '']
+        - selector: div[aria-label="Property overview"]
+          children: 
+            - selector: 'ul.adv-info-list:nth-child(1) > li:nth-child(4) > span:nth-child(2)'
+              mapping: 'Property Type'
+clickhouse:
+  connection_name: clickhouse_db
+  drop_db: true
+  database:
+    name: default
+  loading_table:
+    name: property_adverts
+    description: table for collecting property adverts by schedule
+    columns: [
+      ID,
+      Title,
+      Country,
+      District,
+      City,
+      "City District",
+      "Residential Complex",
+      "RC Globerry Link",
+      "RC Source Link",
+      "Globerry Link",
+      "Source Link",
+      "Real Estate Type",
+      "Property Type",
+      "Material Type",
+      "Ad Type",
+      "Rent type",
+      Price,
+      Currency,
+      Address,
+      "Coords Lat",
+      "Coords Lng",
+      "To City Center",
+      "To Sea",
+      "Room count",
+      "Living rooms",
+      "Bathroom count",
+      "Is Studio",
+      "Area size",
+      "Gross size",
+      "Exterior Features",
+      "Security Features",
+      "Social Features",
+      "Sports Facilities",
+      "Technical Specifications",
+      "Internal Features",
+      "Out Features",
+      "Location Features",
+      "Usage Features",
+      "External Features",
+      "Room Features",
+      "Social Institution Features",
+      Location,
+      Features,
+      "Indoor facilities",
+      "Outdoor features",
+      Furniture,
+      "Doors and windows",
+      "Sport facilities",
+      "Children facilities",
+      Barbecue,
+      Balcony,
+      Staff,
+      "Car park",
+      View,
+      "Property class",
+      "Food and drinks",
+      Security,
+      "Additional facilities",
+      "Equipment and Appliances",
+      Pets,
+      "Entertainment facilities",
+      Healthcare,
+      "Spa, pool and etc",
+      "Pool, sauna and etc",
+      "Outdoor facilities",
+      "Internet and TV",
+      Lighting,
+      "Payment and property management",
+      "Type of rooms",
+      Elevator,
+      "Distance to the sea",
+      Shopping,
+      Bathroom,
+      "Type of bathroom",
+      "Facilities for disabled people",
+      Beach,
+      "Interior design",
+      Meters,
+      "Ceiling height",
+      "Process of construction",
+      Kitchen,
+      Flooring,
+      Walls,
+      "Home plan",
+      Ceiling,
+      "Land plot features",
+      "Type of building",
+      
+      "Developer",
+    ]
+  filter_table:
+    name: property_advert_filters
+    description: table contains filter list for collecting
+    columns: [ 'url', 'source_name' ]
+    prepared_records:
+      - url: /for-sale/property/uae/?price_min=0&price_max=1000000
+        source_name: bayut
+      - url: /for-sale/property/uae/?price_min=1000000&price_max=2000000
+        source_name: bayut
+      - url: /for-sale/property/uae/?price_min=2000000&price_max=3000000
+        source_name: bayut
+      - url: /for-sale/property/uae/?price_min=3000000&price_max=4000000
+        source_name: bayut
+      - url: /for-sale/property/uae/?price_min=4000000
+        source_name: bayut
+     
+      - url: /to-rent/property/uae/?price_min=0&price_max=50000
+        source_name: bayut
+      - url: /to-rent/property/uae/?price_min=50000&price_max=100000
+        source_name: bayut
+      - url: /to-rent/property/uae/?price_min=100000&price_max=150000
+        source_name: bayut
+      - url: /to-rent/property/uae/?price_min=150000&price_max=200000
+        source_name: bayut
+      - url: /to-rent/property/uae/?price_min=200000
+        source_name: bayut
+     
+      - url: /for-sale/commercial/uae/
+        source_name: bayut
+      - url: /to-rent/commercial/uae/
+        source_name: bayut
+     
+      - url: /en/search?c=1&ob=mr&pf=0&pt=1000000
+        source_name: propertyfinder
+      - url: /en/search?c=1&ob=mr&pf=1000000&pt=2000000
+        source_name: propertyfinder
+      - url: /en/search?c=1&ob=mr&pf=2000000&pt=3000000
+        source_name: propertyfinder
+      - url: /en/search?c=1&ob=mr&pf=3000000&pt=4000000
+        source_name: propertyfinder
+      - url: /en/search?c=1&ob=mr&pf=4000000
+        source_name: propertyfinder
+     
+      - url: /en/search?c=2&ob=mr&pf=0&pt=50000
+        source_name: propertyfinder
+      - url: /en/search?c=2&ob=mr&pf=50000&pt=100000
+        source_name: propertyfinder
+      - url: /en/search?c=2&ob=mr&pf=100000&pt=150000
+        source_name: propertyfinder
+      - url: /en/search?c=2&ob=mr&pf=150000&pt=200000
+        source_name: propertyfinder
+      - url: /en/search?c=2&ob=mr&pf=200000
+        source_name: propertyfinder
+
+      # commercial buy
+      - url: /en/search?c=3&ob=mr
+        source_name: propertyfinder
+      # commercial rent
+      - url: /en/search?c=4&ob=mr
+        source_name: propertyfinder

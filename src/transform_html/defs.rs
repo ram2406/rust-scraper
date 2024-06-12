@@ -2,9 +2,7 @@ use derive_more::{Display, Error, From};
 use serde;
 use serde::{Deserialize, Serialize};
 use serde_json;
-use tracing_subscriber::field::display;
 use std::collections::HashMap;
-use std::error::Error;
 use std::vec::Vec;
 use std::str::{self, FromStr};
 
@@ -23,6 +21,7 @@ impl Default for TransformSettings {
 
 
 #[derive(Debug, Clone, Error, Display)]
+#[allow(dead_code)]
 pub enum TransformError {
     #[display(fmt="recursive limit is reached [{}]", level)]
     RecursiveError {
@@ -34,18 +33,6 @@ pub enum TransformError {
     },
 }
 
-
-#[derive(Debug, Clone, Error, Display)]
-#[display(fmt = "recursive limit is reached [{}]", level)]
-pub struct RecursiveError {
-    pub level: usize,
-}
-
-#[derive(Debug, Clone, Error, Display)]
-#[display(fmt = "at least one tag for selector is not found [{}]", tag_name)]
-pub struct AtLeastOneTagNotFoundError {
-    pub tag_name: String,
-}
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, From,)]
 #[serde(default)]
@@ -72,6 +59,7 @@ impl ParserTransfromRule {
 
 #[derive(From, Debug)]
 #[from(forward)]
+#[allow(dead_code)]
 pub struct ParserTransfromRuleError(serde_json::Error);
 
 impl FromStr for ParserTransfromRule {
@@ -335,7 +323,10 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 mod std_tests {
+    use std::error::Error;
+
     use super::*;
 
     #[test]
