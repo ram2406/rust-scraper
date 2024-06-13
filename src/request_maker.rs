@@ -1,6 +1,9 @@
 use derive_more::Display;
-use reqwest::header::{HeaderName, HeaderValue};
-use std::{any::TypeId, collections::HashMap, str::FromStr, time::Duration};
+use reqwest::{header::{HeaderName, HeaderValue}, RequestBuilder};
+use tokio_retry::{strategy::ExponentialBackoff, Retry};
+use tracing::warn;
+use tracing_subscriber::field::display;
+use std::{any::TypeId, collections::HashMap, future::Future, iter::Take, str::FromStr, time::Duration};
 use thiserror::Error;
 
 type HeadersMap = HashMap<String, String>;
@@ -26,8 +29,9 @@ pub struct RequestMakerConfig {
 }
 
 pub struct RequestMaker {
-    client: reqwest_middleware::ClientWithMiddleware,
+    client: reqwest::Client,
     config: RequestMakerConfig,
+    retry_strategy:  Take<ExponentialBackoff>,
 }
 
 impl Default for RequestMakerConfig {
@@ -46,10 +50,17 @@ impl Default for RequestMakerConfig {
     }
 }
 
+#[derive(derive_more::Error, Debug, Display)]
+#[display(fmt="status [{status_code:?}] from forcelist [{status_forcelist:?}]")]
+pub struct StatusCodeError {
+    status_code: reqwest::StatusCode,
+    status_forcelist: StatusVec,
+}
+
 #[derive(Error, Debug, Display)]
 pub enum RequestMakerError {
-    InitError(#[from] reqwest::Error),
-    RequestRetryError(#[from] retry::Error<reqwest::Error>),
+    ReqwestError(#[from] reqwest::Error),
+    StatusCodeError(#[from] StatusCodeError),
     InvalidMethod(#[from] http::method::InvalidMethod),
     MiddlewareError(#[from] reqwest_middleware::Error),
 }
@@ -66,6 +77,9 @@ fn from(hashmap: &HeadersMap) -> reqwest::header::HeaderMap {
         .collect()
 }
 
+
+#[allow(useless_deprecated)]
+#[deprecated(note="complex")]
 mod middleware {
     use async_trait::async_trait;
     use reqwest_middleware::*;
@@ -95,6 +109,14 @@ mod middleware {
             } else {
                 false
             }
+        }
+        fn handle_request(req: &mut reqwest_middleware::RequestBuilder, status_forcelist: &Option<StatusVec>) {
+            if let Some(sfl) = &status_forcelist {
+                req.extensions()
+                    .insert(StatusVecWrapper { value: sfl.clone() });
+            }
+    
+    
         }
     }
 
@@ -186,9 +208,14 @@ impl RequestMaker {
             .timeout(config.timeout)
             .build()?;
 
-        let client = middleware::client_with_middleware(client, &config);
-        Ok(Self { client, config })
+        let retry_strategy = ExponentialBackoff::from_millis(1)
+            .factor(config.backoff_factor.into())
+            .take(config.max_retries.try_into().expect("unexpected max_retries value"));
+
+        Ok(Self { client, config, retry_strategy })
     }
+
+    
 
     pub async fn request(
         &self,
@@ -202,28 +229,47 @@ impl RequestMaker {
                 HeaderValue::from_str(v).unwrap(),
             );
         }
-        if let Some(sfl) = &params.status_forcelist {
-            req.extensions()
-                .insert(middleware::StatusVecWrapper { value: sfl.clone() });
-        }
 
-        let future = req.send();
-        let resp = future.await?;
-        Ok(resp)
+        let status_forcelist_ref: &StatusVec =  if let Some(ref svec) = params.status_forcelist { svec }
+                                                else { &self.config.status_forcelist };
+        let resp = Retry::spawn(self.retry_strategy.clone(),  || async {
+            
+            let status_forcelist = status_forcelist_ref.clone();
+            let req = req.try_clone().expect("somthing wrong with request object");
+            let future = req.send();
+            match future.await {
+                Ok(resp) if status_forcelist.contains(&resp.status().as_u16()) => {
+                    Err(RequestMakerError::StatusCodeError(
+                        StatusCodeError { status_code: resp.status(), status_forcelist }
+                    ))
+                },
+                e => e.map_err(|err| RequestMakerError::ReqwestError(err)),
+            }.map_err(|err| {
+                warn!("attempt with [{:?}]", err);
+                err
+            })
+
+        }).await;
+        
+        resp
     }
+
+
 }
 
 #[cfg(test)]
 mod tests {
-    use tracing::Level;
+    use tokio::io::AsyncWriteExt;
+    use tracing::{info, Level};
 
     use super::*;
 
     #[tokio::test]
     async fn test_request() {
-        tracing_subscriber::fmt()
-            .with_max_level(Level::WARN)
-            .init();
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(Level::INFO)
+            .try_init();
+
 
         let maker = RequestMaker::create(RequestMakerConfig {
             status_forcelist: vec![200],
@@ -254,4 +300,31 @@ mod tests {
 
         println!("{:?}", res.map(|r| r.status()));
     }
+
+    #[tokio::test]
+    async fn tokio_retry_test() {
+        use tokio_retry::Retry;
+        use tokio_retry::strategy::{ExponentialBackoff, jitter};
+
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(Level::INFO)
+            .try_init();
+        
+        
+        
+        async fn action() -> Result<u64, ()> {
+            // do some real-world stuff here...
+            info!("retry");
+            Err(())
+        }
+        
+        let retry_strategy = ExponentialBackoff::from_millis(10)
+            .map(|d| d.mul_f64(333.0)) // add jitter to delays
+            .take(3);
+            // .collect::<Vec<Duration>>();    // limit to 3 retries
+        
+        
+        let result = Retry::spawn(retry_strategy, action).await;
+    }
+
 }
