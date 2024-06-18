@@ -11,26 +11,27 @@ type StatusVec = Vec<u16>;
 
 #[derive(Default)]
 pub struct RequestParams {
-    method: String,
-    url: String,
+    pub method: String,
+    pub url: String,
 
-    headers: HeadersMap,
-    status_forcelist: Option<StatusVec>,
+    pub headers: HeadersMap,
+    pub status_forcelist: Option<StatusVec>,
 }
 
 #[derive(Debug)]
 pub struct RequestMakerConfig {
-    timeout: Duration,
-    max_retries: u32,
-    backoff_factor: u32,
+    pub timeout: Duration,
+    pub max_retries: u32,
+    pub backoff_factor: u32,
 
-    headers: HeadersMap,
-    status_forcelist: StatusVec,
+    pub headers: HeadersMap,
+    pub status_forcelist: StatusVec,
 }
 
+#[derive(Debug)]
 pub struct RequestMaker {
     client: reqwest::Client,
-    config: RequestMakerConfig,
+    pub config: RequestMakerConfig,
     retry_strategy:  Take<ExponentialBackoff>,
 }
 
@@ -75,6 +76,40 @@ fn from(hashmap: &HeadersMap) -> reqwest::header::HeaderMap {
             )
         })
         .collect()
+}
+
+pub fn url_combine(url: &str, urlp: &str) -> String {
+    if urlp.is_empty() || urlp == "/" {
+        return url.to_owned();
+    }
+    let up: Vec<&str> = url.splitn(2, '?').collect();
+    let left = up[0].trim_end_matches('/');
+    let (is_multi, has_prefix) = (up.len() > 1, urlp.chars().nth(0).unwrap() == '/');
+
+    if !is_multi && has_prefix {
+        return format!("{left}{urlp}");
+    }
+
+    let up_second = if up.len() > 1 { up[1] } else { "" };
+    if is_multi && has_prefix {
+        return format!("{left}{urlp}?{up_second}");
+    }
+    
+    let handled_urlp = urlp.trim_matches(|c| c == '?' || c == '&');
+    if is_multi && ! has_prefix {
+        return format!("{left}?{handled_urlp}&{up_second}");
+    }
+    // if ! is_multi && ! has_prefix
+	return format!("{left}?{handled_urlp}")
+}
+
+
+pub fn url_combine_all(urls: &[&str]) -> String {
+	let mut url = urls[0].to_owned();
+	for idx in 1..urls.len() {
+		url = url_combine(&url, urls[idx]);
+	}
+	return url;
 }
 
 
@@ -254,6 +289,12 @@ impl RequestMaker {
         resp
     }
 
+    pub async fn request_text(
+        &self,
+        params: &RequestParams,
+    ) -> Result<String, RequestMakerError> {
+        Ok(self.request(params).await?.text().await?)
+    }
 
 }
 

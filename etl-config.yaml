@@ -166,34 +166,7 @@ sources:
                - '.*?"geo":{"@type":"GeoCoordinates","latitude":(\d+.\d+),"longitude":(\d+.\d+).*'
                - '\2'
 
-  - name: hepsiemlak
-    root_url: 'https://www.hepsiemlak.com/'
-    menu:
-      page_limit: 1
-      default_url: /en/satilik
-      rules:
-        - grouping: MenuItems
-          selector: div.list-view-content > div.links > a
-          children:
-            - mapping: url
-              attribute_name: href
-            - mapping: id
-              attribute_name: href
-              regex_sub_value: ['.*?(\d+-\d+)', '\1']
-    card:
-      rules:
-        - selector: 'h1.fontRB'
-          mapping: Title
-        - selector: '.fz24-text.price'
-          children:
-            - mapping: Currency
-              regex_sub_value: ['.*?\s+?(\w+)', '\1']
-            - mapping: Price
-              regex_sub_value: ['[^\d+]', '']
-        - selector: div[aria-label="Property overview"]
-          children: 
-            - selector: 'ul.adv-info-list:nth-child(1) > li:nth-child(4) > span:nth-child(2)'
-              mapping: 'Property Type'
+  
 clickhouse:
   connection_name: clickhouse_db
   drop_db: true

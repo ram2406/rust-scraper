@@ -1,12 +1,21 @@
 use regex::Regex;
 use scraper;
+use std::rc::Weak;
 use std::vec::Vec;
 use std::str;
 
-use tracing::debug;
+use tracing::{debug, info};
 
 pub mod defs;
 use defs::*;
+
+fn py_adopt_rx((rx, plcmnt): (&str, &str)) -> (String, String) {
+    (rx.to_owned(), defs::prepare_rx_sub_for_replace(plcmnt))
+}
+
+fn bs_contains_execute() {
+
+}
 
 fn transform_html_single<'a, 'b>(
     transformed_data: &mut TransformedData,
@@ -15,12 +24,13 @@ fn transform_html_single<'a, 'b>(
     level: usize,
     settings: &TransformSettings,
 ) -> Result<(), TransformError > {
+    info!("level [{level}], rule [{}, {}, {}, {}]", rule.selector, rule.mapping, rule.contains_selector_text, rule.children.len(),);
     if level >= settings.max_depth_level {
         return Err(TransformError::RecursiveError { level });
     }
 
     let handle_regex = |rx: &Vec<String>, txt: &str| {
-        let (left, right) = (&rx[0], &rx[1]);
+        let (left, right) = py_adopt_rx((&rx[0], &rx[1]));
         let regex = Regex::new(&left).unwrap();
         return regex.replace_all(txt, right).into_owned();
     };
@@ -38,9 +48,37 @@ fn transform_html_single<'a, 'b>(
     let mut selected_soup = soup;
     let mut tags: Vec<scraper::ElementRef<'_>> = Vec::new();
 
+    if rule.contains_selector_text.is_empty() && !rule.selector.is_empty() {
+        let prepared_rule = rule.prepare_selector();
+        
+        if let Some(prepared_rule) = prepared_rule {
+            info!("prepared_rule [{prepared_rule:#?}]");
+            return transform_html_single(
+                transformed_data_out,
+                &soup,
+                &prepared_rule,
+                level +1,
+                settings,
+            );
+        }
+    }
+
+    if !rule.contains_selector_text.is_empty() {
+        let found = soup.text().find(|txt| dbg!(*txt) == rule.contains_selector_text);
+        if found == None {
+            return Ok(());
+        }
+        if !rule.children.is_empty() {
+            info!("handling of children");
+            return transform_html_multi(transformed_data_out, soup, rule.children.as_slice(), level +1, settings);
+        }
+        return Ok(());
+    }
+
     if !rule.selector.is_empty() {
         let selector_str: &'a str = rule.selector.as_str();
         let sc_selector = scraper::Selector::parse(selector_str).unwrap();
+        info!("selector_str [{selector_str}]");
         tags.extend(soup.select(&sc_selector));
 
         if tags.len() == 0 && rule.exception_on_not_found {
@@ -56,7 +94,7 @@ fn transform_html_single<'a, 'b>(
             match transformed_data_out {
                 TransformedData::List(lst) => {
                     for ele in tags {
-                        debug!("push list one");
+                        info!("push list one");
                         transform_html_single(
                             transformed_data_out,
                             &ele,
@@ -70,7 +108,7 @@ fn transform_html_single<'a, 'b>(
                 _ => {
                     let mut nested_data = TransformedData::List(TransformedData::create_data_vec());
                     for ele in tags {
-                        debug!("push dict one");
+                        info!("push dict one");
                         transform_html_single(
                             &mut nested_data,
                             &ele,
@@ -122,6 +160,7 @@ fn transform_html_single<'a, 'b>(
             text.trim().to_string()
         };
 
+        info!("push value {handled_text}");
         transformed_data_out.push_value_path(
             &mappting,
             TransformedData::Value(String::from(handled_text)),
@@ -129,7 +168,8 @@ fn transform_html_single<'a, 'b>(
     }
 
     if !rule.children.is_empty() {
-        transform_html_multi(transformed_data_out, soup, rule.children.as_slice(), level, settings)?;
+        info!("handling of children");
+        transform_html_multi(transformed_data_out, soup, rule.children.as_slice(), level +1, settings)?;
     }
 
     Ok(())
@@ -186,16 +226,25 @@ pub fn transform_html_list<'a, 'b, 'c>(
 #[cfg(test)]
 #[allow(dead_code)]
 mod tests {
-    use std::str::FromStr;
+    use std::{error::Error, str::FromStr};
+
+    use tracing::info;
 
     use super::*;
 
+
+    fn prepare() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .try_init();
+    }
+
+
     #[test]
     fn main_test() {
+        prepare();
         type rl = ParserTransfromRule;
-        // tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
-        // tracing_subscriber::fmt().with_env_filter("declarative_scraper::transform_html").init();
-
+        
         let html = r#"
             <ul>
                 <li class="test">Foo</li>
@@ -220,10 +269,21 @@ mod tests {
                 ..Default::default()
             },
             rl {
-                selector: String::from("li"),
+                selector: String::from("li /* comments */ "),
                 mapping: String::from("lis"),
                 ..Default::default()
             },
+
+            rl {
+                selector: String::from("ul li/*sss*/.test "),
+                mapping: String::from("place2"),
+                ..Default::default()
+            },
+            // rl {
+            //     selector: String::from(r#"li:contains("Baz1")"#),
+            //     mapping: String::from("li_baz"),
+            //     ..Default::default()
+            // },
             rl::from_str(r#"{ "selector": ".test1", "mapping": "test_json" }"#).unwrap(),
         ];
         let data = transform_html(
@@ -232,7 +292,9 @@ mod tests {
             &TransformSettings::default()
         )
         .expect("Err");
+        info!("{data:#?}");
         assert_eq!(data["place"], TransformedData::from("Foo"));
+        assert_eq!(data["place"], data["place2"]);
         assert_eq!(data["test_json"], "Foo1".into());
     }
 
@@ -312,48 +374,11 @@ mod tests {
             },
         };
     }
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-mod deps_tests {
-    use std::error::Error;
-    use tracing::info;
-
-    use super::*;
-
-    // see: https://iproyal.com/blog/web-scraping-with-rust-the-ultimate-guide/
-    #[tokio::test]
-    async fn parse_web_page_with_scraper() -> Result<(), Box<dyn Error>> {
-        tracing_subscriber::fmt::init();
-
-        let client = reqwest::Client::builder().build()?;
-        let response = client
-            .get("https://news.ycombinator.com/")
-            .send()
-            .await?
-            .text()
-            .await?;
-
-        let document = scraper::Html::parse_document(&response);
-        // document.root_element().select(selector)
-        let title_selector = scraper::Selector::parse("span.titleline>a").unwrap();
-
-        let titles = document.select(&title_selector).map(|x| x.inner_html());
-
-        let titles_c = titles.collect::<Vec<String>>();
-        info!("titles {titles_c:?}");
-
-        let value = titles_c.len();
-        assert_eq!(value, 30);
-
-        Ok(())
-    }
 
     #[test]
     fn regex_test() -> Result<(), Box<dyn Error>> {
-        tracing_subscriber::fmt::init();
-
+        prepare();
+        
         let re = Regex::new(r"(?m)^([^:]+):([0-9]+):(.+)$").unwrap();
         let hay = "\
 path/to/foo:54:Blue Harvest
@@ -378,6 +403,53 @@ path/to/baz:3:It's a Trap!
             ]
         );
 
+        let re = Regex::new(r"(\d+)").unwrap();
+        let res = re.replace_all("123", r"page-$1").into_owned();
+        info!("res = [{res}]");
+
+        // for fix shortage of rust-scraper 
+        let source_str = r#"li.property-facts__item:-soup-contains( "Property type:")/*("")*/ .property-facts__value"#;
+        let re = Regex::new(r#":-soup-contains\(\s+?".*?"\s+?\)"#).unwrap();
+        let res = re.replace_all(&source_str, format!("{BS_CONTAINS_MARKER}/*$1*/{BS_CONTAINS_MARKER}")).into_owned();
+        info!("res = [{res}]");
+
         Ok(())
     }
+
+    #[test]
+    fn selector_contains_test() {
+        prepare();
+        type rl = ParserTransfromRule;
+        
+        let html = r#"
+        <html>
+         <head></head>
+         <body>
+           <div>Here is <span>some text</span>.</div>
+            <div>Here is some more text.</div>
+           
+         </body>
+        </html>
+        "#;
+        let rules = [
+            rl {
+                selector: String::from("div:-soup-contains(\"some text\") span"),
+                mapping: String::from("place"),
+                ..Default::default()
+            },
+            rl {
+                selector: String::from("div:-soup-contains(\"some text\") "),
+                mapping: String::from("place2"),
+                ..Default::default()
+            },
+        ];
+        let data = transform_html(
+            html,
+            &rules,
+            &TransformSettings::default()
+        )
+        .expect("Err");
+        info!("data = [{data:#?}]")
+    }
+
 }

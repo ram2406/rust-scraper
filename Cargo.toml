@@ -16,16 +16,19 @@ path = "src/main.rs"
 anyhow = "1.0.86"
 async-trait = "0.1.80"
 clap = { version = "4.5.7", features = ["derive"] }
+dashmap = { version = "5.5.3", features = ["serde"] }
 derive_more = "0.99.17"
 http = "1.1.0"
+lazy_static = "1.4.0"
 regex = "1.10.4"
 reqwest = "0.12.4"
 reqwest-middleware = "0.3.1"
 reqwest-retry = "0.5.0"
 retry = "2.0.0"
 scraper = "0.19.0"
-serde = { version = "1.0.203", features = ["derive"] }
+serde = { version = "1.0.203", features = ["derive", "rc"] }
 serde_json = "1.0.117"
+serde_yaml = "0.9.34"
 thiserror = "1.0.61"
 tokio = { version = "1.38.0", features = ["full"] }
 tokio-retry = "0.3.0"
