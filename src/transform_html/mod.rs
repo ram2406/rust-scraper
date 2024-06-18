@@ -1,5 +1,5 @@
 use regex::Regex;
-use scraper;
+use scraper::{self, selectable::Selectable};
 use std::rc::Weak;
 use std::vec::Vec;
 use std::str;
@@ -17,6 +17,43 @@ fn bs_contains_execute() {
 
 }
 
+fn select_contains<'a, 'b>(
+    transformed_data: &mut TransformedData,
+    soup: &'b scraper::ElementRef,
+    rule: &'a ParserTransfromRule,
+    level: usize,
+    settings: &TransformSettings,
+) -> Result<bool, TransformError > {
+    
+    let Some((text, (left, right))) = 
+        rule.is_contains_selector() 
+        else { return Ok(false) };
+
+    let selector = scraper::Selector::parse(&left).unwrap();
+    let tags: Vec<scraper::ElementRef<'_>> = 
+        if left.is_empty() { soup.select(&selector).collect() } 
+        else { vec![soup.clone()] };
+
+    for ele in tags {
+        if ele.text().find(|s| *s == text).is_none() {
+            continue;
+        }
+        if right.is_empty() {
+            transform_html_single(transformed_data, &ele, &rule.with_empty_selector(), level, settings)?;
+            continue;
+        }
+        
+        let selector = scraper::Selector::parse(&right).unwrap();
+        let tags: Vec<scraper::ElementRef<'_>> = ele.select(&selector).collect();
+        
+        for ele in tags {
+            transform_html_single(transformed_data, &ele, &rule.with_empty_selector(), level, settings)?;
+        }
+    }
+
+    Ok(true)
+}
+
 fn transform_html_single<'a, 'b>(
     transformed_data: &mut TransformedData,
     soup: &'b scraper::ElementRef,
@@ -24,7 +61,7 @@ fn transform_html_single<'a, 'b>(
     level: usize,
     settings: &TransformSettings,
 ) -> Result<(), TransformError > {
-    info!("level [{level}], rule [{}, {}, {}, {}]", rule.selector, rule.mapping, rule.contains_selector_text, rule.children.len(),);
+    debug!("level [{level}], rule [{}, {}, {},]", rule.selector, rule.mapping, rule.children.len(),);
     if level >= settings.max_depth_level {
         return Err(TransformError::RecursiveError { level });
     }
@@ -45,41 +82,16 @@ fn transform_html_single<'a, 'b>(
         transformed_data
     };
 
-    let mut selected_soup = soup;
-    let mut tags: Vec<scraper::ElementRef<'_>> = Vec::new();
-
-    if rule.contains_selector_text.is_empty() && !rule.selector.is_empty() {
-        let prepared_rule = rule.prepare_selector();
-        
-        if let Some(prepared_rule) = prepared_rule {
-            info!("prepared_rule [{prepared_rule:#?}]");
-            return transform_html_single(
-                transformed_data_out,
-                &soup,
-                &prepared_rule,
-                level +1,
-                settings,
-            );
-        }
-    }
-
-    if !rule.contains_selector_text.is_empty() {
-        let found = soup.text().find(|txt| dbg!(*txt) == rule.contains_selector_text);
-        if found == None {
-            return Ok(());
-        }
-        if !rule.children.is_empty() {
-            info!("handling of children");
-            return transform_html_multi(transformed_data_out, soup, rule.children.as_slice(), level +1, settings);
-        }
+    if select_contains(transformed_data_out, &soup, &rule, level, settings)? {
         return Ok(());
     }
 
+    let selected_soup = 
     if !rule.selector.is_empty() {
         let selector_str: &'a str = rule.selector.as_str();
         let sc_selector = scraper::Selector::parse(selector_str).unwrap();
-        info!("selector_str [{selector_str}]");
-        tags.extend(soup.select(&sc_selector));
+        debug!("selector_str [{selector_str}]");
+        let tags: Vec<scraper::ElementRef<'_>> = soup.select(&sc_selector).collect();
 
         if tags.len() == 0 && rule.exception_on_not_found {
             return Err(TransformError::AtLeastOneTagNotFoundError {
@@ -94,7 +106,7 @@ fn transform_html_single<'a, 'b>(
             match transformed_data_out {
                 TransformedData::List(lst) => {
                     for ele in tags {
-                        info!("push list one");
+                        debug!("push list one");
                         transform_html_single(
                             transformed_data_out,
                             &ele,
@@ -108,7 +120,7 @@ fn transform_html_single<'a, 'b>(
                 _ => {
                     let mut nested_data = TransformedData::List(TransformedData::create_data_vec());
                     for ele in tags {
-                        info!("push dict one");
+                        debug!("push dict one");
                         transform_html_single(
                             &mut nested_data,
                             &ele,
@@ -131,8 +143,10 @@ fn transform_html_single<'a, 'b>(
                 }
             }
         }
-        selected_soup = &tags[0];
-    }
+        tags[0]
+    } else {
+        *soup
+    };
 
     let mappting = if !rule.mapping.is_empty() {
         rule.mapping.clone()
@@ -151,7 +165,7 @@ fn transform_html_single<'a, 'b>(
         let text = if attr_name == "text" {
             selected_soup.text().collect::<Vec<_>>().join(" ")
         } else {
-            handle_attr(selected_soup, attr_name)
+            handle_attr(&selected_soup, attr_name)
         };
 
         let handled_text = if !rule.regex_sub_value.is_empty() {
@@ -160,7 +174,7 @@ fn transform_html_single<'a, 'b>(
             text.trim().to_string()
         };
 
-        info!("push value {handled_text}");
+        debug!("push value {handled_text}");
         transformed_data_out.push_value_path(
             &mappting,
             TransformedData::Value(String::from(handled_text)),
@@ -168,7 +182,7 @@ fn transform_html_single<'a, 'b>(
     }
 
     if !rule.children.is_empty() {
-        info!("handling of children");
+        debug!("handling of children");
         transform_html_multi(transformed_data_out, soup, rule.children.as_slice(), level +1, settings)?;
     }
 
@@ -235,7 +249,8 @@ mod tests {
 
     fn prepare() {
         let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_env_filter("transform_html_lib::transform_html")
             .try_init();
     }
 

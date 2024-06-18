@@ -1,3 +1,4 @@
+use clap::builder::Str;
 use derive_more::{Display, Error, From};
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -65,7 +66,6 @@ pub struct ParserTransfromRule {
     pub children: Rc<Vec<Self>>,
     pub grouping: String,
     pub exception_on_not_found: bool,
-    pub contains_selector_text: String,
 }
 
 #[allow(dead_code)]
@@ -78,86 +78,104 @@ impl ParserTransfromRule {
         }
     }
 
-    /// create proxy rules without children
     #[inline]
-    pub fn prepare_selector(&self) -> Option<Self> {
-        let cleared_selector = bs_py_adopt_contains(&self.selector);
-        let is_cleared = cleared_selector.len() != self.selector.len();
-        if !is_cleared {
-            return  None;
+    pub fn with_selector(&self, selector: &str) -> Self {
+        Self {
+            selector: selector.into(),
+            ..self.clone()
         }
-
-        let selectors: Vec<&str> = cleared_selector.split(BS_CONTAINS_MARKER)
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-        dbg!(&selectors);
-        if selectors.len() == 2 {
-            return Some(Self {
-                selector: selectors[0].to_string(),
-                
-                mapping: self.mapping.clone(),
-                grouping: self.grouping.clone(),
-                
-                children: Rc::new(vec![ Self {
-                    selector: Default::default(), //selectors[1].to_string(),
-                    contains_selector_text: self.is_contains_selector().unwrap(),
-                    
-                    mapping: self.mapping.clone(),
-                    grouping: self.grouping.clone(),
-                
-                    ..self.clone()
-                }]),
-                ..Default::default()   
-            });
-        }
-        
-        Some(Self {
-                selector: selectors[0].to_string(),
-                
-                mapping: self.mapping.clone(),
-                grouping: self.grouping.clone(),
-                
-                children: Rc::new(vec![ Self {
-                    // selector: selectors[1].to_string(),
-                    selector: Default::default(),
-                    contains_selector_text: self.is_contains_selector().unwrap(),
-                    
-                    mapping: self.mapping.clone(),
-                    grouping: self.grouping.clone(),
-                
-
-                    children: Rc::new(vec![
-                        Self {
-                            selector: selectors[2].to_string(),
-                            children: self.children.clone(),
-                            
-                            mapping: self.mapping.clone(),
-                            grouping: self.grouping.clone(),
-                
-                            // mapping: Default::default(),
-                            // grouping: Default::default(),
-                
-                            ..self.clone()
-                            
-                        }
-                    ]),
-                    ..Default::default()
-                }]),
-                ..Default::default()   
-        })
     }
+
+    /// create proxy rules without children
+    // #[inline]
+    // pub fn prepare_selector(&self) -> Option<Self> {
+    //     let cleared_selector = bs_py_adopt_contains(&self.selector);
+    //     let is_cleared = cleared_selector.len() != self.selector.len();
+    //     if !is_cleared {
+    //         return  None;
+    //     }
+
+    //     let selectors: Vec<&str> = cleared_selector.split(BS_CONTAINS_MARKER)
+    //         .map(|s| s.trim())
+    //         .filter(|s| !s.is_empty())
+    //         .collect();
+    //     dbg!(&selectors);
+    //     if selectors.len() == 2 {
+    //         return Some(Self {
+    //             selector: selectors[0].to_string(),
+                
+    //             mapping: self.mapping.clone(),
+    //             grouping: self.grouping.clone(),
+                
+    //             children: Rc::new(vec![ Self {
+    //                 selector: Default::default(), //selectors[1].to_string(),
+    //                 contains_selector_text: self.is_contains_selector().unwrap(),
+                    
+    //                 mapping: self.mapping.clone(),
+    //                 grouping: self.grouping.clone(),
+                
+    //                 ..self.clone()
+    //             }]),
+    //             ..Default::default()   
+    //         });
+    //     }
+        
+    //     Some(Self {
+    //             selector: selectors[0].to_string(),
+                
+    //             mapping: self.mapping.clone(),
+    //             grouping: self.grouping.clone(),
+                
+    //             children: Rc::new(vec![ Self {
+    //                 // selector: selectors[1].to_string(),
+    //                 selector: Default::default(),
+    //                 contains_selector_text: self.is_contains_selector().unwrap(),
+                    
+    //                 mapping: self.mapping.clone(),
+    //                 grouping: self.grouping.clone(),
+                
+
+    //                 children: Rc::new(vec![
+    //                     Self {
+    //                         selector: selectors[2].to_string(),
+    //                         children: self.children.clone(),
+                            
+    //                         mapping: self.mapping.clone(),
+    //                         grouping: self.grouping.clone(),
+                
+    //                         // mapping: Default::default(),
+    //                         // grouping: Default::default(),
+                
+    //                         ..self.clone()
+                            
+    //                     }
+    //                 ]),
+    //                 ..Default::default()
+    //             }]),
+    //             ..Default::default()   
+    //     })
+    // }
 
     /// check is contains and return search text
     #[inline]
-    pub fn is_contains_selector(&self) -> Option<String> {
-        RX_BS_CONTAINS_PC.captures(&self.selector)
-            .map(|s| {
-                s.get(2)
-                .map(|s| s.as_str()).unwrap_or("")
-            })
-            .map(String::from)
+    pub fn is_contains_selector(&self) -> Option<(String, (String, String))> {
+        let text = RX_BS_CONTAINS_PC.captures(&self.selector)
+                    .map(|s| {
+                        s.get(2)
+                        .map(|s| s.as_str()).unwrap_or("")
+                    })
+                    .map(String::from);
+        if text == None {
+            return None;
+        }
+        let mut sp = RX_BS_CONTAINS_PC.splitn(&self.selector, 2)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        Some(
+            ( text.unwrap(), (sp.next().unwrap(), sp.next().unwrap_or("".into())) )
+        )
     }
+
 }
 
 #[derive(From, Debug)]
@@ -509,7 +527,7 @@ mod std_tests {
     }
 
     #[test]
-    fn prepare_selector_test() {
+    fn contains_selector_test() {
         prepare();
         let rule = ParserTransfromRule{ 
             selector: r#"li.property-facts__item"#.to_string(),
@@ -517,19 +535,19 @@ mod std_tests {
         };
         
         let _ = {
-            let old = rule;
-            let new = old.prepare_selector();
-            assert_eq!(new, None);
+            let res = rule.is_contains_selector();
+            assert_eq!(res, None);
         };
         
         let rule = ParserTransfromRule{ 
             selector: r#"li.property-facts__item:-soup-contains( "Property type:")/*("")*/ .property-facts__value"#.to_string(),
              ..Default::default() 
         };
-        let rule = rule.prepare_selector();
-        let Some(rule) = rule else { panic!("empty rule") };
-        assert_eq!(rule.children.first().unwrap().contains_selector_text, "Property type:");
-        assert_eq!(rule.children.first().unwrap().selector, r#"/*:-soup-contains( "Property type:")*/"#);
+        let Some((txt, (left, right))) = rule.is_contains_selector() else { panic!("empty result") };
+        
+        assert_eq!(txt, "Property type:");
+        assert_eq!(left, "li.property-facts__item");
+        assert_eq!(right, r#"/*("")*/ .property-facts__value"#);
         
         
     }
