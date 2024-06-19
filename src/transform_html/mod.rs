@@ -1,10 +1,11 @@
 use regex::Regex;
-use scraper::{self, selectable::Selectable};
+use scraper::{self, selectable::Selectable, ElementRef};
+use std::cmp::min;
 use std::rc::Weak;
-use std::vec::Vec;
 use std::str;
+use std::vec::Vec;
 
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 pub mod defs;
 use defs::*;
@@ -13,41 +14,50 @@ fn py_adopt_rx((rx, plcmnt): (&str, &str)) -> (String, String) {
     (rx.to_owned(), defs::prepare_rx_sub_for_replace(plcmnt))
 }
 
-fn bs_contains_execute() {
-
-}
-
 fn select_contains<'a, 'b>(
     transformed_data: &mut TransformedData,
     soup: &'b scraper::ElementRef,
     rule: &'a ParserTransfromRule,
     level: usize,
     settings: &TransformSettings,
-) -> Result<bool, TransformError > {
-    
-    let Some((text, (left, right))) = 
-        rule.is_contains_selector() 
-        else { return Ok(false) };
+) -> Result<bool, TransformError> {
+    let Some((text, (left, right))) = rule.is_contains_selector() else {
+        return Ok(false);
+    };
 
     let selector = scraper::Selector::parse(&left).unwrap();
-    let tags: Vec<scraper::ElementRef<'_>> = 
-        if left.is_empty() { soup.select(&selector).collect() } 
-        else { vec![soup.clone()] };
+    let tags: Vec<scraper::ElementRef<'_>> = if left.is_empty() {
+        soup.select(&selector).collect()
+    } else {
+        vec![soup.clone()]
+    };
 
     for ele in tags {
         if ele.text().find(|s| *s == text).is_none() {
             continue;
         }
         if right.is_empty() {
-            transform_html_single(transformed_data, &ele, &rule.with_empty_selector(), level, settings)?;
+            transform_html_single(
+                transformed_data,
+                &ele,
+                &rule.with_empty_selector(),
+                level,
+                settings,
+            )?;
             continue;
         }
-        
+
         let selector = scraper::Selector::parse(&right).unwrap();
         let tags: Vec<scraper::ElementRef<'_>> = ele.select(&selector).collect();
-        
+
         for ele in tags {
-            transform_html_single(transformed_data, &ele, &rule.with_empty_selector(), level, settings)?;
+            transform_html_single(
+                transformed_data,
+                &ele,
+                &rule.with_empty_selector(),
+                level,
+                settings,
+            )?;
         }
     }
 
@@ -60,8 +70,16 @@ fn transform_html_single<'a, 'b>(
     rule: &'a ParserTransfromRule,
     level: usize,
     settings: &TransformSettings,
-) -> Result<(), TransformError > {
-    debug!("level [{level}], rule [{}, {}, {},]", rule.selector, rule.mapping, rule.children.len(),);
+) -> Result<(), TransformError> {
+    let debmr = "| ".repeat(level);
+    debug!(
+        "{debmr} rule [{}, {}, {}, {}, {:?}]",
+        rule.selector,
+        &rule.mapping,
+        &rule.grouping,
+        rule.children.len(),
+        soup.id(),
+    );
     if level >= settings.max_depth_level {
         return Err(TransformError::RecursiveError { level });
     }
@@ -76,23 +94,33 @@ fn transform_html_single<'a, 'b>(
         return String::from(attr.unwrap_or(""));
     };
 
-    let transformed_data_out: &mut TransformedData = if !rule.grouping.is_empty() {
-        transformed_data.as_map_wrapper()
-    } else {
-        transformed_data
+    let transformed_data_out: &mut TransformedData = {
+        let (group, obj) = (!rule.grouping.is_empty(), !rule.mapping.is_empty());
+
+        if group {
+            transformed_data.as_group_list_wrapper(&rule.grouping)
+        } else if obj {
+            transformed_data.as_map_wrapper()
+        } else {
+            transformed_data
+        }
     };
+
+    // grouping has handled
+    let rule = rule.with_empty_grouping();
+
+    debug!("{debmr} transformed_data_out is {transformed_data_out}");
 
     if select_contains(transformed_data_out, &soup, &rule, level, settings)? {
         return Ok(());
     }
 
-    let selected_soup = 
-    if !rule.selector.is_empty() {
-        let selector_str: &'a str = rule.selector.as_str();
+    let selected_soup = if !rule.selector.is_empty() {
+        let selector_str: &str = rule.selector.as_str();
         let sc_selector = scraper::Selector::parse(selector_str).unwrap();
-        debug!("selector_str [{selector_str}]");
         let tags: Vec<scraper::ElementRef<'_>> = soup.select(&sc_selector).collect();
-
+        debug!("{debmr} selector_str [{selector_str}] tags count [{}]", tags.len());
+        
         if tags.len() == 0 && rule.exception_on_not_found {
             return Err(TransformError::AtLeastOneTagNotFoundError {
                 tag_name: rule.selector.clone(),
@@ -103,60 +131,27 @@ fn transform_html_single<'a, 'b>(
         }
         if tags.len() > 1 {
             let nested_rule = rule.with_empty_selector();
-            match transformed_data_out {
-                TransformedData::List(lst) => {
-                    for ele in tags {
-                        debug!("push list one");
-                        transform_html_single(
-                            transformed_data_out,
-                            &ele,
-                            &nested_rule,
-                            level + 1,
-                            settings,
-                        )?
-                    }
-                    return Ok(());
-                }
-                _ => {
-                    let mut nested_data = TransformedData::List(TransformedData::create_data_vec());
-                    for ele in tags {
-                        debug!("push dict one");
-                        transform_html_single(
-                            &mut nested_data,
-                            &ele,
-                            &nested_rule,
-                            level + 1,
-                            settings,
-                        )?
-                    }
-                    let key_name = if !nested_rule.grouping.is_empty() {
-                        nested_rule.grouping
-                    } else {
-                        nested_rule.mapping
-                    };
-
-                    if !key_name.is_empty() {
-                        debug!("attach list");
-                        transformed_data_out.push_value_path(&key_name, nested_data);
-                    }
-                    return Ok(());
-                }
+            for (idx, &ele) in tags.iter().enumerate() {
+                debug!("{debmr} push tag items, tag index [{idx} {:?}]", ele.id());
+                transform_html_single(
+                    transformed_data_out,
+                    &ele,
+                    &nested_rule,
+                    level + 1,
+                    settings,
+                )?
             }
+            return Ok(());
         }
+        debug!("{debmr} handle one tag as current soup for mapping and chidren, tag [{:?}]", tags[0].id());
         tags[0]
     } else {
         *soup
     };
 
-    let mappting = if !rule.mapping.is_empty() {
-        rule.mapping.clone()
-    } else if !rule.children.is_empty() {
-        rule.grouping.clone()
-    } else {
-        Default::default()
-    };
+    let _ = soup;
 
-    if !mappting.is_empty() {
+    if !rule.mapping.is_empty() {
         let attr_name = if !rule.attribute_name.is_empty() {
             rule.attribute_name.as_str()
         } else {
@@ -174,16 +169,27 @@ fn transform_html_single<'a, 'b>(
             text.trim().to_string()
         };
 
-        debug!("push value {handled_text}");
-        transformed_data_out.push_value_path(
-            &mappting,
-            TransformedData::Value(String::from(handled_text)),
+        debug!(
+            "{debmr} push value {}",
+            &handled_text[0..min(handled_text.len(), 10)]
         );
+        transformed_data_out
+            .push_value_path(&rule.mapping, TransformedData::Value(handled_text.into()));
     }
 
     if !rule.children.is_empty() {
-        debug!("handling of children");
-        transform_html_multi(transformed_data_out, soup, rule.children.as_slice(), level +1, settings)?;
+        debug!("{debmr} handling of children");
+        transform_html_multi(
+            if rule.children.len() > 1 {
+                transformed_data_out.as_map_wrapper()
+            } else {
+                transformed_data_out
+            },
+            &selected_soup,
+            rule.children.as_slice(),
+            level + 1,
+            settings,
+        )?;
     }
 
     Ok(())
@@ -214,7 +220,7 @@ fn transform_html_inner<'a, 'b, 'c>(
 }
 
 #[inline]
-pub fn transform_html<'a, 'b, 'c>(
+pub fn transform_html_map<'a, 'b, 'c>(
     html: &'b str,
     rules: &[ParserTransfromRule],
     settings: &TransformSettings,
@@ -225,6 +231,17 @@ pub fn transform_html<'a, 'b, 'c>(
         TransformedData::Dict(d) => Ok(d),
         _ => panic!("transform_html {UNSUPPORTED_ENUM_TYPE}"),
     }
+}
+
+#[inline]
+pub fn transform_html<'a, 'b, 'c>(
+    html: &'b str,
+    rules: &[ParserTransfromRule],
+    settings: &TransformSettings,
+) -> Result<TransformedData, TransformError> {
+    let mut data = TransformedData::create_dict();
+    transform_html_inner(&mut data, html, rules, settings)?;
+    Ok(data)
 }
 
 pub fn transform_html_list<'a, 'b, 'c>(
@@ -240,27 +257,30 @@ pub fn transform_html_list<'a, 'b, 'c>(
 #[cfg(test)]
 #[allow(dead_code)]
 mod tests {
-    use std::{error::Error, str::FromStr};
+    use std::{error::Error, fs::File, io::Read, path::PathBuf, str::FromStr};
 
     use tracing::info;
+    use tracing_subscriber::fmt::format::FmtSpan;
 
     use super::*;
 
-
-    fn prepare() {
+    fn prepare_test_logs() {
         let _ = tracing_subscriber::fmt()
             .with_max_level(tracing::Level::DEBUG)
+            .with_span_events(FmtSpan::CLOSE)
+            .with_target(false)
             .with_env_filter("transform_html_lib::transform_html")
             .try_init();
     }
 
-
     #[test]
     fn main_test() {
-        prepare();
+        prepare_test_logs();
         type rl = ParserTransfromRule;
-        
+
         let html = r#"
+            <div>
+            <div>
             <ul>
                 <li class="test">Foo</li>
                 <li>Bar</li>
@@ -271,6 +291,8 @@ mod tests {
                 <li>Bar1</li>
                 <li>Baz1</li>
             </ul>
+            </div>
+            </div>
         "#;
         let rules = [
             rl {
@@ -288,25 +310,25 @@ mod tests {
                 mapping: String::from("lis"),
                 ..Default::default()
             },
-
             rl {
                 selector: String::from("ul li/*sss*/.test "),
                 mapping: String::from("place2"),
                 ..Default::default()
             },
-            // rl {
-            //     selector: String::from(r#"li:contains("Baz1")"#),
-            //     mapping: String::from("li_baz"),
-            //     ..Default::default()
-            // },
+            rl {
+                selector: "div".to_string(),
+                grouping: "div_group".into(),
+                children: vec![rl {
+                    selector: "li".into(),
+
+                    ..Default::default()
+                }]
+                .into(),
+                ..Default::default()
+            },
             rl::from_str(r#"{ "selector": ".test1", "mapping": "test_json" }"#).unwrap(),
         ];
-        let data = transform_html(
-            html,
-            &rules,
-            &TransformSettings::default()
-        )
-        .expect("Err");
+        let data = transform_html_map(html, &rules, &TransformSettings::default()).expect("Err");
         info!("{data:#?}");
         assert_eq!(data["place"], TransformedData::from("Foo"));
         assert_eq!(data["place"], data["place2"]);
@@ -316,7 +338,7 @@ mod tests {
     #[test]
     fn err_test() {
         type RL<'c> = ParserTransfromRule;
-        
+
         let html = r#"
             <div>
             <div>
@@ -350,22 +372,36 @@ mod tests {
 
         let mut transformed_data = TransformedData::create_dict();
         let doc = scraper::Html::parse_document(html);
-        match transform_html_single(&mut transformed_data, &doc.root_element(), &rules[0], 1, &TransformSettings { max_depth_level: 2 }) {
+        match transform_html_single(
+            &mut transformed_data,
+            &doc.root_element(),
+            &rules[0],
+            1,
+            &TransformSettings {
+                max_depth_level: 2,
+                ..Default::default()
+            },
+        ) {
             Ok(_) => panic!("error is missing"),
-            Err(err) => { 
+            Err(err) => {
                 println!("{}", err);
                 println!("{:?}", err);
-            },
+            }
         };
 
-        match transform_html_single(&mut transformed_data, &doc.root_element(), &rules[1], 0, &TransformSettings::default()) {
+        match transform_html_single(
+            &mut transformed_data,
+            &doc.root_element(),
+            &rules[1],
+            0,
+            &TransformSettings::default(),
+        ) {
             Ok(_) => panic!("error is missing"),
-            Err(err) => { 
+            Err(err) => {
                 println!("{}", err);
                 println!("{:?}", err);
-            },
+            }
         };
-        
     }
 
     #[test]
@@ -385,15 +421,14 @@ mod tests {
                 other_error => {
                     panic!("Problem opening the file: {:?}", other_error);
                 }
-
             },
         };
     }
 
     #[test]
     fn regex_test() -> Result<(), Box<dyn Error>> {
-        prepare();
-        
+        prepare_test_logs();
+
         let re = Regex::new(r"(?m)^([^:]+):([0-9]+):(.+)$").unwrap();
         let hay = "\
 path/to/foo:54:Blue Harvest
@@ -422,10 +457,15 @@ path/to/baz:3:It's a Trap!
         let res = re.replace_all("123", r"page-$1").into_owned();
         info!("res = [{res}]");
 
-        // for fix shortage of rust-scraper 
+        // for fix shortage of rust-scraper
         let source_str = r#"li.property-facts__item:-soup-contains( "Property type:")/*("")*/ .property-facts__value"#;
         let re = Regex::new(r#":-soup-contains\(\s+?".*?"\s+?\)"#).unwrap();
-        let res = re.replace_all(&source_str, format!("{BS_CONTAINS_MARKER}/*$1*/{BS_CONTAINS_MARKER}")).into_owned();
+        let res = re
+            .replace_all(
+                &source_str,
+                format!("{BS_CONTAINS_MARKER}/*$1*/{BS_CONTAINS_MARKER}"),
+            )
+            .into_owned();
         info!("res = [{res}]");
 
         Ok(())
@@ -433,9 +473,9 @@ path/to/baz:3:It's a Trap!
 
     #[test]
     fn selector_contains_test() {
-        prepare();
+        prepare_test_logs();
         type rl = ParserTransfromRule;
-        
+
         let html = r#"
         <html>
          <head></head>
@@ -458,13 +498,77 @@ path/to/baz:3:It's a Trap!
                 ..Default::default()
             },
         ];
-        let data = transform_html(
-            html,
-            &rules,
-            &TransformSettings::default()
-        )
-        .expect("Err");
+        let data = transform_html_map(html, &rules, &TransformSettings::default()).expect("Err");
         info!("data = [{data:#?}]")
     }
 
+    #[test]
+    fn attr_selector_test() -> Result<(), anyhow::Error> {
+        prepare_test_logs();
+        type rl = ParserTransfromRule;
+        let property_finder_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/test/property-finder.frament.html");
+
+        let mut html = String::new();
+        File::open(property_finder_path)?.read_to_string(&mut html)?;
+
+        let rules = [rl {
+            selector: String::from(
+                r#"ul[aria-label="Properties"][role="list"] li[role="listitem"] article"#,
+            ),
+            // mapping: "properties".into(),
+            grouping: "properties".into(),
+            children: vec![rl {
+                selector: ":scope > a".into(),
+                mapping: "content".into(),
+                // grouping: "href".into(),
+                // attribute_name: "href".into(),
+                // grouping: "links".into(),
+                children: vec![
+                    rl {
+                        mapping: "url".into(),
+                        attribute_name: "href".into(),
+                        ..Default::default()
+                    },
+                    rl {
+                        mapping: "source_link".into(),
+                        attribute_name: "href".into(),
+                        ..Default::default()
+                    },
+                ]
+                .into(),
+                ..Default::default()
+            }]
+            .into(),
+            ..Default::default()
+        }];
+        let data = transform_html(&html, &rules, &TransformSettings::default()).expect("Err");
+
+        info!("data = [\n{}\n]", data.to_json_string());
+
+        // let rules = [rl {
+        //     selector: String::from(
+        //         r#"ul[aria-label="Properties"][role="list"] li[role="listitem"] article"#,
+        //     ),
+        //     // mapping: String::from("properties"),
+        //     grouping: "links".into(),
+        //     children: vec![rl {
+        //         selector: "a".into(),
+        //         // grouping: "links".into(),
+        //         children: vec![rl {
+        //             mapping: "url".into(),
+        //             attribute_name: "href".into(),
+        //             ..Default::default()
+        //         }]
+        //         .into(),
+        //         ..Default::default()
+        //     }]
+        //     .into(),
+        //     ..Default::default()
+        // }];
+        // let data = transform_html(&html, &rules, &TransformSettings::default()).expect("Err");
+
+        // info!("data = [{data:#?}]");
+        Ok(())
+    }
 }

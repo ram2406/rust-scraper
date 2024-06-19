@@ -49,7 +49,7 @@ struct Args {
     rule_max_depth_limit: usize,
 }
 
-fn prepare() {
+fn prepare_test_logs() {
     let _ = tracing_subscriber::fmt()
         .with_max_level(Level::INFO)
         .try_init();
@@ -58,7 +58,7 @@ fn prepare() {
 // TODO: console app
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    prepare();
+    prepare_test_logs();
     let args: Vec<String> = env::args().collect();
     main_inner(&args).await
 }
@@ -101,9 +101,11 @@ mod tests {
         )
     }
 
+    /// menu page is constant, card pages are always different (classes/attrs), 
+    /// turns out protecting from scrapers ... sad
     #[tokio::test]
     async fn test_main() {
-        prepare();
+        prepare_test_logs();
         let res = main_inner(
             &vec![
                 "app_name_arg",
@@ -131,7 +133,7 @@ mod dep_tests {
 
     #[tokio::test]
     async fn parse_web_page_with_scraper() -> Result<(), anyhow::Error> {
-        prepare();
+        prepare_test_logs();
 
         let client = reqwest::Client::builder().build()?;
         let response = client

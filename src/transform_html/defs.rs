@@ -1,10 +1,10 @@
-use clap::builder::Str;
 use derive_more::{Display, Error, From};
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde;
 use serde::{Deserialize, Serialize};
 use serde_json;
+use core::fmt;
 use std::collections::HashMap;
 use std::default;
 use std::rc::Rc;
@@ -14,12 +14,14 @@ use std::vec::Vec;
 #[derive(Debug)]
 pub struct TransformSettings {
     pub max_depth_level: usize,
+    pub default_key_name: String,
 }
 
 impl Default for TransformSettings {
     fn default() -> TransformSettings {
         TransformSettings {
-            max_depth_level: 10000,
+            max_depth_level: 10_000,
+            default_key_name: "list".into(),
         }
     }
 }
@@ -79,82 +81,20 @@ impl ParserTransfromRule {
     }
 
     #[inline]
+    pub fn with_empty_grouping(&self) -> Self {
+        Self {
+            grouping: Default::default(),
+            ..self.clone()
+        }
+    }
+
+    #[inline]
     pub fn with_selector(&self, selector: &str) -> Self {
         Self {
             selector: selector.into(),
             ..self.clone()
         }
     }
-
-    /// create proxy rules without children
-    // #[inline]
-    // pub fn prepare_selector(&self) -> Option<Self> {
-    //     let cleared_selector = bs_py_adopt_contains(&self.selector);
-    //     let is_cleared = cleared_selector.len() != self.selector.len();
-    //     if !is_cleared {
-    //         return  None;
-    //     }
-
-    //     let selectors: Vec<&str> = cleared_selector.split(BS_CONTAINS_MARKER)
-    //         .map(|s| s.trim())
-    //         .filter(|s| !s.is_empty())
-    //         .collect();
-    //     dbg!(&selectors);
-    //     if selectors.len() == 2 {
-    //         return Some(Self {
-    //             selector: selectors[0].to_string(),
-                
-    //             mapping: self.mapping.clone(),
-    //             grouping: self.grouping.clone(),
-                
-    //             children: Rc::new(vec![ Self {
-    //                 selector: Default::default(), //selectors[1].to_string(),
-    //                 contains_selector_text: self.is_contains_selector().unwrap(),
-                    
-    //                 mapping: self.mapping.clone(),
-    //                 grouping: self.grouping.clone(),
-                
-    //                 ..self.clone()
-    //             }]),
-    //             ..Default::default()   
-    //         });
-    //     }
-        
-    //     Some(Self {
-    //             selector: selectors[0].to_string(),
-                
-    //             mapping: self.mapping.clone(),
-    //             grouping: self.grouping.clone(),
-                
-    //             children: Rc::new(vec![ Self {
-    //                 // selector: selectors[1].to_string(),
-    //                 selector: Default::default(),
-    //                 contains_selector_text: self.is_contains_selector().unwrap(),
-                    
-    //                 mapping: self.mapping.clone(),
-    //                 grouping: self.grouping.clone(),
-                
-
-    //                 children: Rc::new(vec![
-    //                     Self {
-    //                         selector: selectors[2].to_string(),
-    //                         children: self.children.clone(),
-                            
-    //                         mapping: self.mapping.clone(),
-    //                         grouping: self.grouping.clone(),
-                
-    //                         // mapping: Default::default(),
-    //                         // grouping: Default::default(),
-                
-    //                         ..self.clone()
-                            
-    //                     }
-    //                 ]),
-    //                 ..Default::default()
-    //             }]),
-    //             ..Default::default()   
-    //     })
-    // }
 
     /// check is contains and return search text
     #[inline]
@@ -238,7 +178,7 @@ impl Into<String> for TransformedData {
     fn into(self) -> String {
         match self {
             TransformedData::Value(s) => s,
-            _ => self.to_string(),
+            _ => self.to_json_string(),
         }
     }
 }
@@ -283,6 +223,36 @@ impl TransformedData {
             }
             TransformedData::Dict(_) => self,
             _ => panic!("as_map_wrapper {UNSUPPORTED_ENUM_TYPE}"),
+        }
+    }
+
+    pub fn as_list_wrapper(&mut self, key: &str) -> &mut Self {
+        match self {
+            TransformedData::List(lst) => self,
+            TransformedData::Dict(dict) => {
+                dict.insert(key.into(), TransformedData::create_list());
+                dict.get_mut(key).unwrap()
+            },
+            _ => panic!("as_group_list_wrapper {UNSUPPORTED_ENUM_TYPE}"),
+        }
+    }
+
+    pub fn as_group_list_wrapper(&mut self, grouping_key: &str) -> &mut Self {
+        if grouping_key.is_empty() {
+            return self;
+        }
+        match self {
+            TransformedData::List(lst) => {
+                lst.push(TransformedData::Dict(TransformedData::create_data_map()));
+                lst.last_mut().map(|dict: &mut TransformedData|{
+                    dict.push_value(grouping_key, TransformedData::create_list()).unwrap()
+                }).unwrap()
+            },
+            TransformedData::Dict(dict) => {
+                dict.insert(grouping_key.into(), TransformedData::create_list());
+                dict.get_mut(grouping_key).unwrap()
+            },
+            _ => panic!("as_group_list_wrapper {UNSUPPORTED_ENUM_TYPE}"),
         }
     }
 
@@ -386,15 +356,33 @@ impl TransformedData {
         return None;
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn to_json_string(&self) -> String {
         serde_json::to_string(self).ok().unwrap()
+    }
+}
+
+impl fmt::Display for TransformedData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        
+        write!(f, "{}", match self {
+            TransformedData::Dict(d) => format!("Dict({})", d.len()),
+            TransformedData::List(l) => format!("List({})", l.len()),
+            TransformedData::Value(v) => format!("Value({})", v.len()),
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
 
+    use tracing::info;
+
     use super::*;
+    fn prepare_test_logs() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .try_init();
+    }
 
     #[test]
     fn json_test() {
@@ -412,7 +400,7 @@ mod tests {
         let json_expected = r#"{"test":{"a":{"b":["1","2","3"]}}}"#;
         assert_eq!(j, json_expected);
 
-        let j = data.to_string();
+        let j = data.to_json_string();
         assert_eq!(j, json_expected);
 
         let j: String = data.into();
@@ -458,6 +446,42 @@ mod tests {
         let mut td1 = TransformedData::List(TransformedData::create_data_vec());
         consumer(&mut td1);
     }
+
+    #[test]
+    fn contains_selector_test() {
+        prepare_test_logs();
+        let rule = ParserTransfromRule{ 
+            selector: r#"li.property-facts__item"#.to_string(),
+             ..Default::default() 
+        };
+        
+        let _ = {
+            let res = rule.is_contains_selector();
+            assert_eq!(res, None);
+        };
+        
+        let rule = ParserTransfromRule{ 
+            selector: r#"li.property-facts__item:-soup-contains( "Property type:")/*("")*/ .property-facts__value"#.to_string(),
+             ..Default::default() 
+        };
+        let Some((txt, (left, right))) = rule.is_contains_selector() else { panic!("empty result") };
+        
+        assert_eq!(txt, "Property type:");
+        assert_eq!(left, "li.property-facts__item");
+        assert_eq!(right, r#"/*("")*/ .property-facts__value"#); 
+    }
+
+    #[test]
+    fn regex_replace_all_fix() -> Result<(), anyhow::Error> {
+        prepare_test_logs();
+        let rstr = prepare_rx_sub_for_replace(r"page-\1");
+        info!("rstr = [{rstr}]");
+        let rx = Regex::new(r"(\d+)")?;
+        let res = rx.replace_all("123445", rstr).into_owned();
+        info!("res = [{res}]");
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -465,17 +489,8 @@ mod tests {
 mod std_tests {
     use std::error::Error;
 
-    use tracing::info;
+    use derive_more::Display;
 
-    use super::*;
-
-    fn prepare() {
-        let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .try_init();
-    }
-
-    
     #[test]
     fn check_traits() {
         trait MixType {
@@ -513,42 +528,5 @@ mod std_tests {
         }
         println!("{:?}", vec);
     }
-
-    #[test]
-    fn regex_replace_all_fix() -> Result<(), anyhow::Error> {
-        prepare();
-        let rstr = prepare_rx_sub_for_replace(r"page-\1");
-        info!("rstr = [{rstr}]");
-        let rx = Regex::new(r"(\d+)")?;
-        let res = rx.replace_all("123445", rstr).into_owned();
-        info!("res = [{res}]");
-
-        Ok(())
-    }
-
-    #[test]
-    fn contains_selector_test() {
-        prepare();
-        let rule = ParserTransfromRule{ 
-            selector: r#"li.property-facts__item"#.to_string(),
-             ..Default::default() 
-        };
-        
-        let _ = {
-            let res = rule.is_contains_selector();
-            assert_eq!(res, None);
-        };
-        
-        let rule = ParserTransfromRule{ 
-            selector: r#"li.property-facts__item:-soup-contains( "Property type:")/*("")*/ .property-facts__value"#.to_string(),
-             ..Default::default() 
-        };
-        let Some((txt, (left, right))) = rule.is_contains_selector() else { panic!("empty result") };
-        
-        assert_eq!(txt, "Property type:");
-        assert_eq!(left, "li.property-facts__item");
-        assert_eq!(right, r#"/*("")*/ .property-facts__value"#);
-        
-        
-    }
+    
 }

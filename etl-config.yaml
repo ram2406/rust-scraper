@@ -105,14 +105,14 @@ sources:
         - grouping: menu_items
           selector: ul[aria-label="Properties"][role="list"] li[role="listitem"] article
           children:
-            - selector: a
+            - selector: ":scope > a"
               children:
               - mapping: url
                 attribute_name: href
 
               - mapping: Source Link
                 attribute_name: href
-                regex_sub_value: [ '^(.*)$', 'https://www.propertyfinder.ae\1' ]
+                # regex_sub_value: [ '^(.*)$', 'https://www.propertyfinder.ae\1' ]
               - mapping: ID
                 attribute_name: href
                 regex_sub_value: ['.*?(\d+).html', '\1']

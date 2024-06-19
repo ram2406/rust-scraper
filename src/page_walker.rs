@@ -153,7 +153,7 @@ impl PageWalker {
                 ..Default::default()
             })
             .await?;
-        let data = transform_html(
+        let data = transform_html_map(
             &response,
             rules,
             &TransformSettings {
@@ -174,7 +174,12 @@ impl PageWalker {
     }
 
     async fn parse_card_page(&self, url_part: &str) -> Result<DataMap, PageWalkerError> {
-        let url = url_combine(&self.source_config().root_url, &url_part);
+        let is_absolute_url = url_part.starts_with("http://") || url_part.starts_with("https://");
+        let url = if is_absolute_url {
+            url_part.into()
+        } else {
+            url_combine(&self.source_config().root_url, &url_part)
+        };
         self.extract_data(&url, &self.source_config().card.rules)
             .await
     }
@@ -195,6 +200,7 @@ impl PageWalker {
         let mut card_data_list = Vec::new();
 
         for ele in menu_items.iter() {
+            info!("ele [{ele:#?}]");
             let url = ele
                 .exract_dict()
                 .get("url")
